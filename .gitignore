@@ -1,0 +1,25 @@
+# Secrets (only the empty example belongs in Git)
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Frontend
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local files
+.DS_Store
+*.log
+challenge-deploy.tar.gz

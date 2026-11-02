@@ -1,0 +1,68 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #242925;
+  background: #faf9f6;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --muted: #696e69;
+  --accent: #315d48;
+  --border: #dcded7;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, textarea { font: inherit; }
+button, a, textarea { -webkit-tap-highlight-color: transparent; }
+::selection { background: #dce9db; }
+:focus-visible { outline: 3px solid #6c9275; outline-offset: 4px; }
+
+.page { max-width: 1120px; min-height: 100svh; margin: 0 auto; padding: 0 48px; display: flex; flex-direction: column; }
+.page-header { min-height: 96px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--border); }
+.brand { color: inherit; text-decoration: none; font-size: 19px; font-weight: 650; letter-spacing: -0.8px; }
+.brand span { color: #7c8779; font-weight: 400; }
+.provider-label { color: var(--muted); font-size: 12px; }
+.workspace { width: 100%; max-width: 720px; margin: 76px auto 88px; }
+.eyebrow { font-size: 10px; font-weight: 650; letter-spacing: 2px; color: var(--accent); margin: 0 0 18px; }
+h1 { font-size: clamp(36px, 5vw, 52px); line-height: 1.1; letter-spacing: -2px; font-weight: 500; margin: 0 0 16px; }
+.subtitle { margin: 0; color: var(--muted); line-height: 1.6; font-size: 15px; }
+.intro { margin-bottom: 46px; }
+.field-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+label, h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.character-count { font-variant-numeric: tabular-nums; font-size: 11px; color: var(--muted); }
+textarea { display: block; width: 100%; min-height: 180px; max-height: 480px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 20px; color: inherit; background: #fffefa; line-height: 1.7; font-size: 16px; transition: border-color 150ms; }
+textarea::placeholder { color: #7c817a; }
+textarea:focus { border-color: var(--accent); }
+textarea:disabled { opacity: 0.65; }
+.form-footer { margin-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.keyboard-hint { color: var(--muted); font-size: 11px; }
+button { display: inline-flex; align-items: center; justify-content: center; gap: 22px; min-height: 46px; min-width: 156px; border: 1px solid transparent; border-radius: 6px; padding: 12px 20px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 150ms; }
+button:hover:not(:disabled) { background: #244b37; }
+button:disabled { background: #e3e6df; color: #697265; cursor: not-allowed; }
+button span { font-size: 19px; line-height: 1; }
+.answer-panel { border-top: 1px solid var(--border); margin-top: 44px; padding-top: 26px; min-height: 150px; }
+.model-name { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; text-align: right; }
+.empty-answer, .loading { color: var(--muted); font-size: 14px; line-height: 1.8; margin: 20px 0 0; }
+.answer-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.85; margin-top: 20px; }
+.answer-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.loading { display: flex; align-items: center; gap: 10px; }
+.loading-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.3s ease-in-out infinite; }
+.error-message { background: #fbefeb; border-left: 2px solid #a34633; color: #873b2c; padding: 14px 16px; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+.page-footer { margin-top: auto; border-top: 1px solid var(--border); padding: 22px 0; display: flex; justify-content: space-between; gap: 24px; color: var(--muted); font-size: 10px; line-height: 1.7; }
+.page-footer span:last-child { max-width: 360px; text-align: right; }
+
+@keyframes pulse { 50% { opacity: 0.25; } }
+@media (max-width: 600px) {
+  .page { padding: 0 24px; }
+  .page-header { min-height: 76px; }
+  .workspace { margin: 52px auto 60px; }
+  .intro { margin-bottom: 34px; }
+  .form-footer { flex-wrap: wrap; }
+  button { margin-left: auto; }
+  textarea { padding: 16px; }
+  .page-footer { flex-direction: column; gap: 6px; }
+  .page-footer span:last-child { text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
