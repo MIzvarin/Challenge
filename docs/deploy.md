@@ -42,9 +42,15 @@ nano .env
 Нужные переменные:
 
 ```dotenv
-OPENROUTER_API_KEY=ваш_ключ
-OPENROUTER_MODEL=nvidia/nemotron-3.5-lightning:free
+OPENCODE_GO_API_KEY=ваш_ключ_OpenCode_Console
+OPENCODE_GO_MODEL=deepseek-v4.1-flash
 ```
+
+Ключ должен принадлежать workspace с активной подпиской Go. Для DeepSeek в
+OpenCode Console разрешите **Settings → Privacy → Regions → Global**. Проверьте
+условия использования Go: тариф предназначен для coding-агентов, а не произвольного
+публичного чат-сервиса. Отключите **Extra Usage**, если не хотите списаний с баланса
+сверх подписки; приложение не меняет эту настройку аккаунта.
 
 `.env` исключён из контекста Docker и не попадает в образ. Docker передаёт его
 значения в окружение при запуске контейнера. Не публикуйте вывод `docker inspect`:
@@ -67,7 +73,7 @@ docker run -d \
   challenge:local
 ```
 
-Проверка без расхода квоты OpenRouter:
+Проверка без расхода квоты OpenCode Go:
 
 ```sh
 docker ps --filter name=challenge

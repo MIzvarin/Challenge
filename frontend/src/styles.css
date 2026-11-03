@@ -41,10 +41,10 @@ button:hover:not(:disabled) { background: #244b37; }
 button:disabled { background: #e3e6df; color: #697265; cursor: not-allowed; }
 button span { font-size: 19px; line-height: 1; }
 .answer-panel { border-top: 1px solid var(--border); margin-top: 44px; padding-top: 26px; min-height: 150px; }
-.model-name { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; text-align: right; }
+.answer-question { color: var(--muted); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; margin: 18px 0 8px; }
+.answer-metadata { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 11px; line-height: 1.6; font-variant-numeric: tabular-nums; }
 .empty-answer, .loading { color: var(--muted); font-size: 14px; line-height: 1.8; margin: 20px 0 0; }
 .answer-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.85; margin-top: 20px; }
-.answer-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .loading { display: flex; align-items: center; gap: 10px; }
 .loading-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.3s ease-in-out infinite; }
 .error-message { background: #fbefeb; border-left: 2px solid #a34633; color: #873b2c; padding: 14px 16px; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }

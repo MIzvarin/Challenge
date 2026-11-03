@@ -7,17 +7,22 @@ import type { Answer } from './api';
 
 vi.mock('./api', () => ({ askQuestion: vi.fn() }));
 const mockAsk = vi.mocked(askQuestion);
-const answer: Answer = { answer: 'Ответ модели', model: 'nvidia/nemotron-3.5-lightning:free', truncated: false };
+const answer: Answer = {
+  question: 'Привет',
+  date: '2026-11-03T12:30:00Z',
+  tokens: 142,
+  answer: 'Ответ модели',
+};
 
 describe('App', () => {
   beforeEach(() => {
     mockAsk.mockReset();
   });
 
-  it('shows OpenRouter attribution and data-sharing notice', () => {
+  it('shows DeepSeek and OpenCode Go attribution and data-sharing notice', () => {
     render(<App />);
-    expect(screen.getByText('На базе OpenRouter')).toBeInTheDocument();
-    expect(screen.getByText(/Вопрос отправляется через OpenRouter провайдеру модели/)).toBeInTheDocument();
+    expect(screen.getByText('DeepSeek · OpenCode Go')).toBeInTheDocument();
+    expect(screen.getByText(/Вопрос отправляется через OpenCode Go провайдеру DeepSeek/)).toBeInTheDocument();
   });
 
   it('rejects empty and whitespace-only questions', async () => {
@@ -38,6 +43,15 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: /отправить/i }));
     expect(await screen.findByText('Ответ модели')).toBeInTheDocument();
     expect(mockAsk).toHaveBeenCalledWith('Привет', expect.any(AbortSignal));
+    expect(screen.getByText('Привет', { selector: 'p' })).toHaveClass('answer-question');
+    expect(screen.getByText('Токенов потрачено: 142')).toBeInTheDocument();
+    const timestamp = document.querySelector('time');
+    expect(timestamp).toHaveAttribute('datetime', answer.date);
+    expect(timestamp).toHaveTextContent(/03\.11\.(?:20)?26/);
+
+    await user.clear(screen.getByLabelText('Ваш вопрос'));
+    await user.type(screen.getByLabelText('Ваш вопрос'), 'Другой вопрос');
+    expect(screen.getByText('Привет')).toBeInTheDocument();
   });
 
   it('blocks duplicate requests while waiting', async () => {
@@ -55,12 +69,12 @@ describe('App', () => {
   });
 
   it('shows errors and permits another attempt', async () => {
-    mockAsk.mockRejectedValueOnce(new Error('Лимит OpenRouter исчерпан.')).mockResolvedValueOnce(answer);
+    mockAsk.mockRejectedValueOnce(new Error('Лимит OpenCode Go исчерпан.')).mockResolvedValueOnce(answer);
     const user = userEvent.setup();
     render(<App />);
     await user.type(screen.getByLabelText('Ваш вопрос'), 'Привет');
     await user.click(screen.getByRole('button', { name: /отправить/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Лимит OpenRouter исчерпан.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Лимит OpenCode Go исчерпан.');
     await user.click(screen.getByRole('button', { name: /отправить/i }));
     expect(await screen.findByText('Ответ модели')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -76,14 +90,19 @@ describe('App', () => {
   });
 
   it('renders provider HTML as text, not executable markup', async () => {
-    mockAsk.mockResolvedValue({ ...answer, answer: '<script>alert(1)</script>', truncated: true });
+    mockAsk.mockResolvedValue({
+      ...answer,
+      question: '<img src=x onerror=alert(1)>',
+      answer: '<script>alert(1)</script>',
+    });
     const user = userEvent.setup();
     const { container } = render(<App />);
     await user.type(screen.getByLabelText('Ваш вопрос'), 'Привет');
     await user.click(screen.getByRole('button', { name: /отправить/i }));
     expect(await screen.findByText('<script>alert(1)</script>')).toBeInTheDocument();
     expect(container.querySelector('script')).toBeNull();
-    expect(screen.getByText(/Достигнут лимит длины ответа/)).toBeInTheDocument();
+    expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
+    expect(container.querySelector('img')).toBeNull();
   });
 
   it('aborts the active request on unmount', async () => {

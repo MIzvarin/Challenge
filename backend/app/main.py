@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import ROOT_DIR, Settings, load_settings
-from .openrouter import Answer, ask_openrouter
+from .opencode_go import API_BASE_URL, Answer, ask_opencode_go
 
 
 class Question(BaseModel):
@@ -52,11 +52,11 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         async with httpx.AsyncClient(
-            base_url="https://openrouter.ai",
+            base_url=API_BASE_URL,
             timeout=httpx.Timeout(45, connect=10),
             transport=transport,
         ) as client:
-            app.state.openrouter_client = client
+            app.state.opencode_go_client = client
             yield
 
     app = FastAPI(title="Challenge API", lifespan=lifespan)
@@ -82,9 +82,9 @@ def create_app(
     @app.post("/api/ask", response_model=Answer)
     async def ask(payload: Question):
         if not settings.api_key:
-            raise HTTPException(503, "Добавьте OPENROUTER_API_KEY в корневой .env и перезапустите сервер.")
+            raise HTTPException(503, "Добавьте OPENCODE_GO_API_KEY из OpenCode Console в корневой .env и перезапустите сервер.")
         limiter.check()
-        return await ask_openrouter(payload.question, settings, app.state.openrouter_client)
+        return await ask_opencode_go(payload.question, settings, app.state.opencode_go_client)
 
     # Only the compiled frontend is public. The root .env is never served.
     frontend_dist = ROOT_DIR / "frontend" / "dist"

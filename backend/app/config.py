@@ -6,8 +6,7 @@ from dotenv import dotenv_values
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALLOWED_MODELS = (
-    "nvidia/nemotron-3.5-lightning:free",
-    "google/gemma-4-31b-it:free",
+    "deepseek-v4.1-flash",
 )
 
 
@@ -18,13 +17,16 @@ class Settings:
 
     def __post_init__(self):
         if self.model not in ALLOWED_MODELS:
-            raise ValueError("OPENROUTER_MODEL must be one of the supported :free models.")
+            raise ValueError(
+                "OPENCODE_GO_MODEL must be one of: "
+                + ", ".join(ALLOWED_MODELS)
+            )
 
 
 def load_settings() -> Settings:
     # Read only the repository's root .env; deployment variables take precedence.
     values = {**dotenv_values(ROOT_DIR / ".env"), **os.environ}
     return Settings(
-        api_key=(values.get("OPENROUTER_API_KEY") or "").strip(),
-        model=(values.get("OPENROUTER_MODEL") or ALLOWED_MODELS[0]).strip(),
+        api_key=(values.get("OPENCODE_GO_API_KEY") or "").strip(),
+        model=(values.get("OPENCODE_GO_MODEL") or ALLOWED_MODELS[0]).strip(),
     )

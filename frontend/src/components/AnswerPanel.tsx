@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import type { Answer } from '../api';
 
 interface AnswerPanelProps {
@@ -6,12 +7,11 @@ interface AnswerPanelProps {
   error: string | null;
 }
 
-export function AnswerPanel({ response, isSubmitting, error }: AnswerPanelProps) {
+export function AnswerPanel({ response, isSubmitting, error }: AnswerPanelProps): ReactElement {
   return (
     <section className="answer-panel" aria-labelledby="answer-heading" aria-busy={isSubmitting}>
       <div className="field-heading">
         <h2 id="answer-heading">Ответ</h2>
-        {response && <span className="model-name">{response.model}</span>}
       </div>
       <div role="status" aria-live="polite" aria-atomic="true">
         {isSubmitting && (
@@ -19,8 +19,14 @@ export function AnswerPanel({ response, isSubmitting, error }: AnswerPanelProps)
         )}
         {!isSubmitting && response && (
           <>
+            <p className="answer-question">{response.question}</p>
+            <div className="answer-metadata">
+              <time dateTime={response.date}>
+                {new Date(response.date).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}
+              </time>
+              <span>Токенов потрачено: {response.tokens}</span>
+            </div>
             <div className="answer-text">{response.answer}</div>
-            {response.truncated && <p className="answer-note">Достигнут лимит длины ответа. Попробуйте задать более узкий вопрос.</p>}
           </>
         )}
         {!isSubmitting && !response && !error && (

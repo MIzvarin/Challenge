@@ -1,7 +1,7 @@
 [project]
 name = "challenge-api"
 version = "0.1.0"
-description = "A small server-side proxy for free OpenRouter models"
+description = "A server-side proxy for DeepSeek through OpenCode Go"
 requires-python = ">=3.15"
 dependencies = [
     "fastapi>=0.115,<1",
