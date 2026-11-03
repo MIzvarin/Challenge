@@ -55,7 +55,6 @@ export function App() {
     <main className="page">
       <header className="page-header">
         <a className="brand" href="/" aria-label="Challenge — на главную">challenge<span aria-hidden="true"> / </span>ai</a>
-        <span className="provider-label">DeepSeek · OpenCode Go</span>
       </header>
       <div className="workspace">
         <div className="intro">
@@ -73,7 +72,7 @@ export function App() {
       </div>
       <footer className="page-footer">
         <span>Без истории. Без лишнего.</span>
-        <span>Вопрос отправляется через OpenCode Go провайдеру DeepSeek. Не указывайте секреты — ИИ может ошибаться.</span>
+        <span>Вопрос отправляется внешнему ИИ-сервису. Не указывайте секреты — ИИ может ошибаться.</span>
       </footer>
     </main>
   );

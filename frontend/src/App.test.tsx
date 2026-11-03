@@ -19,10 +19,10 @@ describe('App', () => {
     mockAsk.mockReset();
   });
 
-  it('shows DeepSeek and OpenCode Go attribution and data-sharing notice', () => {
+  it('shows a neutral data-sharing notice without model or provider branding', () => {
     render(<App />);
-    expect(screen.getByText('DeepSeek · OpenCode Go')).toBeInTheDocument();
-    expect(screen.getByText(/Вопрос отправляется через OpenCode Go провайдеру DeepSeek/)).toBeInTheDocument();
+    expect(screen.queryByText(/DeepSeek|OpenCode/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Вопрос отправляется внешнему ИИ-сервису/)).toBeInTheDocument();
   });
 
   it('rejects empty and whitespace-only questions', async () => {
