@@ -9,15 +9,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
 
 from .config import ROOT_DIR, Settings, load_settings
-from .opencode_go import API_BASE_URL, Answer, ask_opencode_go
-
-
-class Question(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-    question: str = Field(min_length=1, max_length=4000)
+from .opencode_go import API_BASE_URL
+from .schemas import Answer, Question
+from .solver import solve
 
 
 class RateLimiter:
@@ -53,7 +49,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         async with httpx.AsyncClient(
             base_url=API_BASE_URL,
-            timeout=httpx.Timeout(45, connect=10),
+            timeout=httpx.Timeout(180, connect=10),
             transport=transport,
         ) as client:
             app.state.opencode_go_client = client
@@ -72,7 +68,7 @@ def create_app(
     async def validation_error(request, exc):
         return JSONResponse(
             status_code=422,
-            content={"detail": "Введите вопрос длиной от 1 до 4 000 символов."},
+            content={"detail": "Проверьте формат запроса: непустой вопрос, режим, UUID диалога и историю переписки."},
         )
 
     @app.get("/api/health")
@@ -84,7 +80,7 @@ def create_app(
         if not settings.api_key:
             raise HTTPException(503, "Добавьте OPENCODE_GO_API_KEY из OpenCode Console в корневой .env и перезапустите сервер.")
         limiter.check()
-        return await ask_opencode_go(payload.question, settings, app.state.opencode_go_client)
+        return await solve(payload, settings, app.state.opencode_go_client)
 
     # Only the compiled frontend is public. The root .env is never served.
     frontend_dist = ROOT_DIR / "frontend" / "dist"

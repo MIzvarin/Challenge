@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.config import ALLOWED_MODELS, Settings, load_settings
 from app.main import RateLimiter, create_app
+from app.solver import LANGUAGE_INSTRUCTION
 
 
 def make_client(handler, api_key="test-secret", model=ALLOWED_MODELS[0]):
@@ -19,7 +20,7 @@ def make_client(handler, api_key="test-secret", model=ALLOWED_MODELS[0]):
 def completion(answer="Привет!", finish_reason="stop", tokens=142):
     return {
         "choices": [{
-            "message": {"content": json.dumps({"answer": answer}, ensure_ascii=False)},
+            "message": {"content": answer},
             "finish_reason": finish_reason,
         }],
         "usage": {"total_tokens": tokens},
@@ -31,25 +32,18 @@ def test_question_is_sent_with_server_key():
         assert str(request.url) == "https://opencode.ai/inference/go/openai/v1/chat/completions"
         assert request.headers["authorization"] == "Bearer test-secret"
         assert request.headers["user-agent"] == "challenge-qa/0.1"
-        assert UUID(request.headers["x-opencode-session"]).version == 4
+        assert UUID(request.headers["x-opencode-session"]).version == 5
         payload = json.loads(request.content)
         assert payload["model"] == "deepseek-v4.1-flash"
         assert payload["messages"][-1] == {"role": "user", "content": "Привет"}
-        assert payload["max_tokens"] == 50
-        assert "50 токенов" in payload["messages"][0]["content"]
-        assert payload["stop"] == ["<END_OF_ANSWER>"]
-        assert payload["response_format"]["type"] == "json_schema"
-        json_schema = payload["response_format"]["json_schema"]
-        assert json_schema["strict"] is True
-        schema = json_schema["schema"]
-        assert schema["type"] == "object"
-        assert schema["required"] == ["answer"]
-        assert set(schema["properties"]) == {"answer"}
-        assert schema["additionalProperties"] is False
-        assert payload["thinking"] == {"type": "disabled"}
+        assert payload["messages"] == [
+            {"role": "system", "content": LANGUAGE_INSTRUCTION},
+            {"role": "user", "content": "Привет"},
+        ]
+        assert payload["thinking"] == {"type": "enabled"}
+        assert payload["reasoning_effort"] == "low"
         assert set(payload) == {
-            "model", "messages", "max_tokens", "stop",
-            "response_format", "thinking", "stream",
+            "model", "messages", "thinking", "reasoning_effort", "stream",
         }
         assert payload["stream"] is False
         return httpx.Response(200, json=completion())
@@ -59,9 +53,17 @@ def test_question_is_sent_with_server_key():
         response = client.post("/api/ask", json={"question": "  Привет  "})
     assert response.status_code == 200
     result = response.json()
-    assert result == {
-        "question": "Привет", "date": result["date"], "tokens": 142, "answer": "Привет!",
+    assert result["question"] == "Привет"
+    assert result["mode"] == "direct"
+    assert result["effort"] == "low"
+    assert result["tokens"] == 142
+    assert len(result["results"]) == 1
+    answer = result["results"][0]
+    assert answer == {
+        "mode": "direct", "answer": "Привет!", "tokens": 142,
+        "duration_ms": answer["duration_ms"], "stages": [], "error": None,
     }
+    assert answer["duration_ms"] >= 0
     date = datetime.fromisoformat(result["date"])
     assert date.utcoffset().total_seconds() == 0
     assert before <= date <= datetime.now(UTC)
@@ -70,7 +72,7 @@ def test_question_is_sent_with_server_key():
 
 
 @pytest.mark.parametrize("payload", [
-    {}, {"question": ""}, {"question": " \n "}, {"question": "x" * 4001},
+    {}, {"question": ""}, {"question": " \n "},
     {"question": 42}, {"question": "Hi", "model": "paid-model"},
 ])
 def test_invalid_questions_never_call_provider(payload):
@@ -164,23 +166,16 @@ def test_invalid_json_from_provider():
     assert response.status_code == 502
 
 
-def test_truncated_answer_is_rejected_even_if_json_is_complete():
+def test_truncated_answer_is_rejected_even_if_content_is_nonempty():
     with make_client(lambda request: httpx.Response(200, json=completion("Часть", "length"))) as client:
         response = client.post("/api/ask", json={"question": "Привет"})
     assert response.status_code == 502
-    assert "50 токенов" in response.json()["detail"]
+    assert "ограничения провайдера" in response.json()["detail"]
     assert "answer" not in response.json()
 
 
-@pytest.mark.parametrize("content", [
-    'Простой текст test-secret', '```json\n{"answer":"Ответ"}\n```',
-    '{"answer":"test-secret"', '[]', 'null', '{}',
-    '{"answer":123}', '{"answer":null}', '{"answer":true}',
-    '{"answer":""}', '{"answer":"  \\n "}',
-    '{"answer":"Ответ","tokens":1}',
-    '{"answer":"Ответ","question":"Подмена","date":"2000-01-01"}',
-])
-def test_model_output_must_match_strict_json_schema(content):
+@pytest.mark.parametrize("content", [123, True, [], {}, {"answer": "test-secret"}])
+def test_model_output_must_be_text(content):
     body = completion()
     body["choices"][0]["message"]["content"] = content
     with make_client(lambda request: httpx.Response(200, json=body)) as client:
@@ -204,25 +199,28 @@ def test_missing_or_invalid_usage_is_not_fabricated(usage):
 
 
 def test_long_question_is_preserved_without_model_echo_and_answer_is_trimmed():
-    question = "В" * 4000
+    question = "В" * 20000
     body = completion("  Краткий ответ.  ", tokens=1800)
-    with make_client(lambda request: httpx.Response(200, json=body)) as client:
+    def handler(request):
+        assert json.loads(request.content)["messages"][-1]["content"] == question
+        return httpx.Response(200, json=body)
+
+    with make_client(handler) as client:
         response = client.post("/api/ask", json={"question": question})
     assert response.status_code == 200
     result = response.json()
     assert result["question"] == question
     assert result["tokens"] == 1800
-    assert result["answer"] == "Краткий ответ."
+    assert result["results"][0]["answer"] == "Краткий ответ."
 
 
 def test_api_response_schema_forbids_extra_fields_and_requires_metadata():
     with make_client(lambda request: httpx.Response(200, json=completion())) as client:
         schema = client.get("/openapi.json").json()["components"]["schemas"]["Answer"]
     assert schema["additionalProperties"] is False
-    assert schema["required"] == ["question", "date", "tokens", "answer"]
+    assert schema["required"] == ["question", "date", "mode", "effort", "tokens", "results"]
     assert schema["properties"]["date"]["format"] == "date-time"
-    assert schema["properties"]["tokens"]["type"] == "integer"
-    assert schema["properties"]["tokens"]["minimum"] == 0
+    assert schema["properties"]["tokens"]["anyOf"][0] == {"type": "integer", "minimum": 0}
 
 
 @pytest.mark.parametrize("location", ["top", "choice"])
@@ -299,7 +297,7 @@ def test_empty_length_response_explains_exhausted_budget(content):
     with make_client(lambda request: httpx.Response(200, json=body)) as client:
         response = client.post("/api/ask", json={"question": "Сложный вопрос"})
     assert response.status_code == 502
-    assert "исчерпала лимит генерации" in response.json()["detail"]
+    assert "ограничения провайдера" in response.json()["detail"]
     assert "Попробуйте ещё раз" not in response.json()["detail"]
 
 
@@ -308,7 +306,7 @@ def test_length_response_without_message_explains_exhausted_budget():
     with make_client(lambda request: httpx.Response(200, json=body)) as client:
         response = client.post("/api/ask", json={"question": "Сложный вопрос"})
     assert response.status_code == 502
-    assert "исчерпала лимит генерации" in response.json()["detail"]
+    assert "ограничения провайдера" in response.json()["detail"]
 
 
 def test_app_limits_requests_before_calling_opencode_go():
@@ -384,13 +382,13 @@ def test_independent_questions_have_distinct_go_session_ids():
         for question in ("Первый вопрос", "Второй вопрос"):
             assert client.post("/api/ask", json={"question": question}).status_code == 200
     assert len(set(session_ids)) == 2
-    assert all(UUID(session_id).version == 4 for session_id in session_ids)
+    assert all(UUID(session_id).version == 5 for session_id in session_ids)
 
 
 @pytest.mark.parametrize("finish_reason", [
     "content_filter", "insufficient_system_resource", "aborted", "tool_calls", "unknown",
 ])
-def test_incomplete_generations_do_not_return_valid_looking_partial_json(finish_reason):
+def test_incomplete_generations_do_not_return_valid_looking_partial_text(finish_reason):
     body = completion("Partial answer test-secret", finish_reason)
     with make_client(lambda request: httpx.Response(200, json=body)) as client:
         response = client.post("/api/ask", json={"question": "Привет"})
@@ -399,7 +397,7 @@ def test_incomplete_generations_do_not_return_valid_looking_partial_json(finish_
     assert "test-secret" not in response.text
 
 
-def test_unsupported_schema_never_falls_back_to_json_mode_or_another_endpoint():
+def test_invalid_generation_parameters_never_fall_back_to_another_endpoint():
     requests = []
 
     def handler(request):
@@ -409,11 +407,11 @@ def test_unsupported_schema_never_falls_back_to_json_mode_or_another_endpoint():
     with make_client(handler) as client:
         response = client.post("/api/ask", json={"question": "Привет"})
     assert response.status_code == 502
-    assert "JSON Schema" in response.json()["detail"]
+    assert "параметры генерации" in response.json()["detail"]
     assert "test-secret" not in response.text
     assert len(requests) == 1
     assert str(requests[0].url) == "https://opencode.ai/inference/go/openai/v1/chat/completions"
-    assert json.loads(requests[0].content)["response_format"]["json_schema"]["strict"] is True
+    assert "response_format" not in json.loads(requests[0].content)
 
 
 def test_go_access_error_explains_deepseek_privacy_settings():
@@ -448,10 +446,12 @@ def test_supported_models_use_only_go_endpoint(model):
         calls.append(payload)
         assert payload["model"] == model
         assert str(request.url) == "https://opencode.ai/inference/go/openai/v1/chat/completions"
-        assert payload["thinking"] == {"type": "disabled"}
-        assert payload["max_tokens"] == 50
-        assert payload["stop"] == ["<END_OF_ANSWER>"]
-        assert payload["response_format"]["json_schema"]["strict"] is True
+        assert payload["thinking"] == {"type": "enabled"}
+        assert payload["reasoning_effort"] == "low"
+        assert "max_tokens" not in payload
+        assert "max_completion_tokens" not in payload
+        assert "stop" not in payload
+        assert "response_format" not in payload
         assert "provider" not in payload
         assert "reasoning" not in payload
         return httpx.Response(200, json=completion())
@@ -459,7 +459,7 @@ def test_supported_models_use_only_go_endpoint(model):
     with make_client(handler, model=model) as client:
         response = client.post("/api/ask", json={"question": "Привет"})
     assert response.status_code == 200
-    assert response.json()["answer"] == "Привет!"
+    assert response.json()["results"][0]["answer"] == "Привет!"
     assert len(calls) == 1
 
 

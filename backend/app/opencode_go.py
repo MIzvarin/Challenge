@@ -1,21 +1,12 @@
-from datetime import UTC, datetime
-from uuid import uuid4
-
 import httpx
 from fastapi import HTTPException
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from .config import Settings
+from .schemas import Effort
 
 API_BASE_URL = "https://opencode.ai/inference/go/openai/v1/"
 USER_AGENT = "challenge-qa/0.1"
-MAX_TOKENS = 50
-STOP_SEQUENCE = "<END_OF_ANSWER>"
-
-
-class GeneratedAnswer(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    answer: str = Field(min_length=1, description="Краткий ответ на вопрос пользователя.")
 
 
 class CompletionUsage(BaseModel):
@@ -34,14 +25,6 @@ class CompletionChoice(BaseModel):
 class Completion(BaseModel):
     choices: list[CompletionChoice]
     usage: CompletionUsage | None = None
-
-
-class Answer(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    question: str = Field(min_length=1, max_length=4000)
-    date: AwareDatetime
-    tokens: int = Field(ge=0)
-    answer: str = Field(min_length=1)
 
 
 def _error_status(error: object) -> int:
@@ -79,7 +62,7 @@ def _provider_error(status_code: int, response: httpx.Response, error: object = 
                 "Откройте OpenCode Console → ваш workspace → Settings → Privacy → Regions "
                 "и выберите Global. API-ключ менять не требуется.",
             )
-        return HTTPException(502, "OpenCode Go отклонил параметры генерации. Проверьте поддержку JSON Schema, stop и режима thinking у DeepSeek.")
+        return HTTPException(502, "OpenCode Go отклонил параметры генерации. Проверьте настройки модели DeepSeek.")
     if status_code == 404:
         return HTTPException(
             502,
@@ -95,65 +78,41 @@ def _parse_generated_answer(choice: CompletionChoice) -> str:
     if choice.finish_reason == "length":
         raise HTTPException(
             502,
-            f"Модель исчерпала лимит генерации ({MAX_TOKENS} токенов), не завершив ответ. "
-            "Сократите вопрос или выберите другую модель.",
+            "Модель достигла ограничения провайдера, не завершив ответ. "
+            "Приложение не ограничивает число токенов. Попробуйте разбить задачу на части.",
         )
     if choice.finish_reason != "stop":
         raise HTTPException(502, "Модель не завершила ответ. Попробуйте ещё раз.")
 
     content = choice.message.content if choice.message else None
-    try:
-        generated = GeneratedAnswer.model_validate_json((content or "").strip())
-    except ValueError:
-        raise HTTPException(
-            502, "Модель вернула ответ, не соответствующий JSON Schema. Попробуйте ещё раз."
-        ) from None
-
-    answer = generated.answer.strip()
+    answer = (content or "").strip()
     if not answer:
         raise HTTPException(502, "Модель вернула пустой или некорректный ответ. Попробуйте ещё раз.")
     return answer
 
 
-async def ask_opencode_go(question: str, settings: Settings, client: httpx.AsyncClient) -> Answer:
+async def complete(
+    messages: list[dict[str, str]],
+    settings: Settings,
+    client: httpx.AsyncClient,
+    session_id: str,
+    effort: Effort,
+) -> tuple[str, int]:
     try:
         response = await client.post(
             "chat/completions",
             headers={
                 "Authorization": f"Bearer {settings.api_key}",
                 "User-Agent": USER_AGENT,
-                # Each independent question is its own one-request conversation.
-                "x-opencode-session": str(uuid4()),
+                # Stages share a session; conversation context is always sent explicitly.
+                "x-opencode-session": session_id,
             },
             json={
                 "model": settings.model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Ты полезный помощник. Отвечай кратко и по существу, "
-                            "на языке пользователя, если он не попросил другой. "
-                            "Верни только JSON-объект с единственным полем answer, без Markdown. "
-                            f"Весь JSON должен уложиться в {MAX_TOKENS} токенов: дай ответ в 1–2 коротких "
-                            "предложениях и обязательно закрой JSON. "
-                            f"Не включай маркер {STOP_SEQUENCE} внутрь JSON."
-                        ),
-                    },
-                    {"role": "user", "content": question},
-                ],
-                "max_tokens": MAX_TOKENS,
-                # Stop on a unique marker, never on JSON punctuation or newlines.
-                "stop": [STOP_SEQUENCE],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "answer",
-                        "strict": True,
-                        "schema": GeneratedAnswer.model_json_schema(),
-                    },
-                },
+                "messages": messages,
                 # Use DeepSeek's native switch, not OpenRouter's reasoning object.
-                "thinking": {"type": "disabled"},
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": effort,
                 "stream": False,
             },
         )
@@ -191,11 +150,4 @@ async def ask_opencode_go(question: str, settings: Settings, client: httpx.Async
     if completion.usage is None:
         raise HTTPException(502, "OpenCode Go не вернул статистику расхода токенов. Попробуйте ещё раз.")
 
-    # Metadata is authoritative: never ask the model to invent dates or token usage,
-    # or spend the output budget echoing a potentially 4,000-char question.
-    return Answer(
-        question=question,
-        date=datetime.now(UTC),
-        tokens=completion.usage.total_tokens,
-        answer=answer,
-    )
+    return answer, completion.usage.total_tokens

@@ -1,39 +1,92 @@
 import type { ReactElement } from 'react';
-import type { Answer } from '../api';
+import type { Result } from '../api';
+import { isPendingTurn } from '../conversations';
+import type { Turn } from '../conversations';
+import { MODE_LABELS, STAGE_LABELS } from '../modes';
 
-interface AnswerPanelProps {
-  response: Answer | null;
-  isSubmitting: boolean;
-  error: string | null;
+interface ResultPanelProps {
+  result: Result;
+  comparison: boolean;
 }
 
-export function AnswerPanel({ response, isSubmitting, error }: AnswerPanelProps): ReactElement {
+function ResultPanel({ result, comparison }: ResultPanelProps): ReactElement {
+  let heading = 'Ответ';
+  if (comparison) heading = MODE_LABELS[result.mode];
+  else if (result.mode === 'roles') heading = 'Итог критика';
+
   return (
-    <section className="answer-panel" aria-labelledby="answer-heading" aria-busy={isSubmitting}>
+    <section className={`result-card${result.error ? ' result-failed' : ''}`} aria-label={MODE_LABELS[result.mode]}>
+      <div className="result-heading">
+        <h3>{heading}</h3>
+        <span className="result-duration">{(result.duration_ms / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} сек.</span>
+      </div>
+      <p className="answer-metadata">
+        {result.tokens === null ? 'Полный расход токенов неизвестен' : `Токенов потрачено: ${result.tokens.toLocaleString('ru-RU')}`}
+      </p>
+      {result.answer && <div className="answer-text">{result.answer}</div>}
+      {result.error && <p className="error-message" role="alert">{result.error}</p>}
+      {result.stages.length > 0 && (
+        <div className="stages">
+          {result.stages.map((stage) => (
+            <details key={stage.name} className="stage">
+              <summary>{STAGE_LABELS[stage.name]} <span>{stage.tokens.toLocaleString('ru-RU')} токенов</span></summary>
+              <div className="stage-text">{stage.content}</div>
+            </details>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+interface AnswerPanelProps {
+  turns: Turn[];
+}
+
+export function AnswerPanel({ turns }: AnswerPanelProps): ReactElement {
+  const isSubmitting = turns.some(isPendingTurn);
+  return (
+    <section className="answer-panel" aria-labelledby="conversation-heading" aria-busy={isSubmitting}>
       <div className="field-heading">
-        <h2 id="answer-heading">Ответ</h2>
+        <h2 id="conversation-heading">Переписка</h2>
+        <span className="character-count">Вопросов: {turns.length}</span>
       </div>
-      <div role="status" aria-live="polite" aria-atomic="true">
-        {isSubmitting && (
-          <p className="loading"><span className="loading-dot" aria-hidden="true" />Получаем ответ…</p>
-        )}
-        {!isSubmitting && response && (
-          <>
-            <p className="answer-question">{response.question}</p>
-            <div className="answer-metadata">
-              <time dateTime={response.date}>
-                {new Date(response.date).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}
-              </time>
-              <span>Токенов потрачено: {response.tokens}</span>
-            </div>
-            <div className="answer-text">{response.answer}</div>
-          </>
-        )}
-        {!isSubmitting && !response && !error && (
-          <p className="empty-answer">Пока здесь тихо. Задайте первый вопрос.</p>
-        )}
+      {turns.length === 0 && <p className="empty-answer">Задайте первую задачу. История этой вкладки сохранится в браузере.</p>}
+      <div className="conversation-turns">
+        {turns.map((turn) => {
+          const { response, error } = turn;
+          const date = response?.date ?? turn.date;
+          const comparison = response?.mode === 'compare';
+          return (
+            <article className="conversation-turn" key={turn.id}>
+              <div className="turn-question">
+                <span className="eyebrow">ВЫ</span>
+                <p className="answer-question">{turn.question}</p>
+                <div className="answer-metadata">
+                  <time dateTime={date}>
+                    {new Date(date).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}
+                  </time>
+                  {response && <span>{response.effort ? `effort: ${response.effort}` : 'До настройки effort'}</span>}
+                  {comparison && response.tokens !== null && (
+                    <span>Всего токенов: {response.tokens.toLocaleString('ru-RU')}</span>
+                  )}
+                </div>
+              </div>
+              {response && (
+                <div className={comparison ? 'comparison-grid' : 'single-result'}>
+                  {response.results.map((result) => (
+                    <ResultPanel key={result.mode} result={result} comparison={comparison} />
+                  ))}
+                </div>
+              )}
+              {isPendingTurn(turn) && (
+                <p className="loading" role="status"><span className="loading-dot" aria-hidden="true" />Получаем ответ…</p>
+              )}
+              {error && <p className="error-message" role="alert">{error}</p>}
+            </article>
+          );
+        })}
       </div>
-      {error && <p className="error-message" role="alert">{error}</p>}
     </section>
   );
 }

@@ -1,4 +1,4 @@
-import type { FormEvent } from 'react';
+import type { FormEvent, ReactElement } from 'react';
 
 interface QuestionFormProps {
   question: string;
@@ -7,17 +7,17 @@ interface QuestionFormProps {
   onSubmit: () => void;
 }
 
-export function QuestionForm({ question, isSubmitting, onQuestionChange, onSubmit }: QuestionFormProps) {
+export function QuestionForm({ question, isSubmitting, onQuestionChange, onSubmit }: QuestionFormProps): ReactElement {
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     onSubmit();
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form className="question-form" onSubmit={handleSubmit}>
       <div className="field-heading">
         <label htmlFor="question">Ваш вопрос</label>
-        <span className="character-count">{question.length.toLocaleString('ru-RU')} / 4 000</span>
+        <span className="character-count">Символов: {question.length.toLocaleString('ru-RU')}</span>
       </div>
       <textarea
         id="question"
@@ -30,9 +30,8 @@ export function QuestionForm({ question, isSubmitting, onQuestionChange, onSubmi
             event.currentTarget.form?.requestSubmit();
           }
         }}
-        placeholder="О чём хотите спросить?"
-        maxLength={4000}
-        rows={6}
+        placeholder="Опишите задачу или задайте уточняющий вопрос…"
+        rows={4}
         required
         disabled={isSubmitting}
         aria-describedby="question-hint"
