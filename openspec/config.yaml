@@ -1,0 +1,21 @@
+schema: spec-driven
+
+context: |
+  Language: Russian
+  All artifacts must be written in Russian.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+  Project: Challenge — сравнение подходов к решению задач через DeepSeek и OpenCode Go.
+  Backend: Python 3.15.2, FastAPI, HTTPX (backend/).
+  Frontend: React 19.3.0, TypeScript, Vite (frontend/).
+  README.md describes current behavior, API contracts and verification commands.
+  Deployment instructions are in docs/deploy.md.
+  Conversation history lives in browser localStorage, not on the server.
+  API credentials stay on the server; never include secrets in artifacts.
+
+rules:
+  proposal:
+    - Clearly distinguish changed behavior from existing behavior and state what is out of scope.
+  specs:
+    - Describe observable behavior with concrete scenarios; preserve English structural headings and SHALL/MUST keywords.
+  tasks:
+    - Include relevant backend/frontend tests and documentation updates; do not call the real model API during tests.

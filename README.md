@@ -75,6 +75,40 @@ UUID поколения хранится отдельно в `challenge.conversa
 - React **19.3.0**, TypeScript, Vite; Node.js **22.12+**, npm **11+**.
 - Модель: **DeepSeek V4.1 Flash**, API ID `deepseek-v4.1-flash`, через OpenCode Go.
 
+## Работа с OpenSpec
+
+В репозитории настроен [OpenSpec](https://openspec.dev/docs) с профилем `core`
+и интеграцией для OpenCode. Контекст и правила — в `openspec/config.yaml`,
+спецификации — в `openspec/specs/`, активные изменения — в `openspec/changes/`.
+Существующее поведение пока описано в этом README; начальные спецификации ещё не перенесены.
+
+CLI можно установить без Node.js официальным установщиком (macOS/Linux):
+
+```sh
+curl -fsSL https://openspec.dev/cli/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Интеграция сгенерирована OpenSpec **1.16.0**. Команды в OpenCode:
+
+- `/opsx-explore` — изучить идею без реализации.
+- `/opsx-propose <описание>` — подготовить предложение, спецификации, дизайн и задачи.
+- `/opsx-update` — скорректировать план изменения.
+- `/opsx-apply` — реализовать согласованные задачи.
+- `/opsx-sync` — перенести изменения требований в основные спецификации.
+- `/opsx-archive` — архивировать завершённое изменение и обновить спецификации.
+
+Артефакты пишутся по-русски; структурные заголовки OpenSpec остаются на английском.
+Команды CLI запускаются из корня репозитория:
+
+```sh
+openspec list
+openspec validate --all --strict
+openspec update
+```
+
+`openspec update` обновляет сгенерированные команды и навыки после обновления CLI.
+
 ## Локальный запуск
 
 Из корня проекта, с установленным Python 3.15.2:
