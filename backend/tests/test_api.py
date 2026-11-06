@@ -5,10 +5,77 @@ from uuid import UUID
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter, ValidationError
 
 from app.config import ALLOWED_MODELS, Settings, load_settings
 from app.main import RateLimiter, create_app
 from app.solver import LANGUAGE_INSTRUCTION
+from app.schemas import AskQuestion, TemperatureQuestion
+
+
+@pytest.mark.parametrize("temperature", [0, 0.0, 0.7, 1.2])
+def test_temperature_question_schema(temperature):
+    question = TypeAdapter(AskQuestion).validate_python({"question": "  Привет  ", "temperature": temperature})
+    assert isinstance(question, TemperatureQuestion)
+    assert question.question == "Привет"
+    assert question.temperature == temperature
+    assert question.mode == "direct"
+    assert not hasattr(question, "effort")
+
+
+@pytest.mark.parametrize("temperature", [0, 0.7, 1.2])
+def test_temperature_direct_uses_shared_generation_path(temperature):
+    calls = []
+    history = [{"role": "user", "content": "Раньше"}, {"role": "assistant", "content": "Ответ"}]
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        assert set(body) == {"model", "messages", "thinking", "temperature", "stream"}
+        assert body["thinking"] == {"type": "disabled"}
+        assert body["temperature"] == temperature
+        assert body["stream"] is False
+        assert body["messages"] == [
+            {"role": "system", "content": LANGUAGE_INSTRUCTION}, *history,
+            {"role": "user", "content": "Привет"},
+        ]
+        return httpx.Response(200, json=completion())
+
+    with make_client(handler) as client:
+        response = client.post("/api/ask", json={
+            "question": "Привет", "temperature": temperature, "history": {"direct": history},
+        })
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert response.json()["temperature"] == temperature
+    assert response.json()["effort"] is None
+
+
+@pytest.mark.parametrize("changes", [
+    {"temperature": value} for value in ("0.7", False, True, None, -1, 0.5, 2)
+] + [
+    {"temperature": 0.7, "effort": value} for value in ("low", "max", None)
+] + [
+    {"temperature": 0.7, "mode": mode} for mode in ("steps", "prompt", "roles", "compare")
+] + [
+    {"temperature": 0.7, "thinking": {"type": "enabled"}},
+    {"temperature": 0.7, "history": {"roles": []}},
+    {"temperature": 0.7, "history": {"direct": [{"role": "user", "content": "Hi"}]}},
+])
+def test_invalid_temperature_request_never_calls_provider(changes):
+    def handler(request):
+        pytest.fail("Invalid input must not reach provider")
+
+    with make_client(handler) as client:
+        response = client.post("/api/ask", json={"question": "Привет", **changes})
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+
+
+@pytest.mark.parametrize("temperature", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_temperature_is_rejected(temperature):
+    with pytest.raises(ValidationError):
+        TypeAdapter(AskQuestion).validate_python({"question": "Hi", "temperature": temperature})
 
 
 def make_client(handler, api_key="test-secret", model=ALLOWED_MODELS[0]):
@@ -216,11 +283,58 @@ def test_long_question_is_preserved_without_model_echo_and_answer_is_trimmed():
 
 def test_api_response_schema_forbids_extra_fields_and_requires_metadata():
     with make_client(lambda request: httpx.Response(200, json=completion())) as client:
-        schema = client.get("/openapi.json").json()["components"]["schemas"]["Answer"]
+        document = client.get("/openapi.json").json()
+        schema = document["components"]["schemas"]["Answer"]
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["question", "date", "mode", "effort", "tokens", "results"]
     assert schema["properties"]["date"]["format"] == "date-time"
     assert schema["properties"]["tokens"]["anyOf"][0] == {"type": "integer", "minimum": 0}
+    temperature_schema = document["components"]["schemas"]["TemperatureAnswer"]
+    assert temperature_schema["additionalProperties"] is False
+    assert temperature_schema["properties"]["effort"]["type"] == "null"
+    assert "temperature" in temperature_schema["required"]
+    assert temperature_schema["properties"]["temperature"]["enum"] == [0, 0.7, 1.2]
+    assert len(document["paths"]["/api/ask"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]["anyOf"]) == 2
+
+
+@pytest.mark.parametrize("settings", [{}, {"effort": "max"}, {"temperature": 0}])
+def test_response_preserves_envelope_and_reports_real_settings(settings):
+    with make_client(lambda request: httpx.Response(200, json=completion(tokens=0))) as client:
+        before = datetime.now(UTC)
+        response = client.post("/api/ask", json={"question": "Привет", **settings})
+    data = response.json()
+    keys = {"question", "date", "mode", "effort", "tokens", "results"}
+    assert set(data) == (keys | {"temperature"} if "temperature" in settings else keys)
+    assert data["effort"] == (None if "temperature" in settings else settings.get("effort", "low"))
+    assert data["tokens"] == 0
+    assert before <= datetime.fromisoformat(data["date"]) <= datetime.now(UTC)
+    assert set(data["results"][0]) == {"mode", "answer", "tokens", "duration_ms", "stages", "error"}
+    assert data["results"][0]["stages"] == []
+    assert data["results"][0]["duration_ms"] >= 0
+
+
+@pytest.mark.parametrize("failure, status", [
+    (httpx.Response(400, json={"error": {"message": "bad parameters"}}), 502),
+    (httpx.Response(429, json={"error": {"message": "private"}}), 429),
+    (httpx.Response(200, json=completion(finish_reason="length")), 502),
+    (httpx.Response(200, json={"choices": completion()["choices"]}), 502),
+    (httpx.ReadTimeout("private"), 504),
+])
+def test_temperature_failures_use_shared_errors_without_retry(failure, status):
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    with make_client(handler) as client:
+        response = client.post("/api/ask", json={"question": "Привет", "temperature": 1.2})
+    assert response.status_code == status
+    assert len(calls) == 1
+    assert calls[0]["thinking"] == {"type": "disabled"}
+    assert "private" not in response.text
 
 
 @pytest.mark.parametrize("location", ["top", "choice"])

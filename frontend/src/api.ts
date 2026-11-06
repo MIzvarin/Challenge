@@ -1,5 +1,6 @@
-import { EFFORTS, STRATEGIES } from './modes';
-import type { Effort, Mode, Strategy } from './modes';
+import { EFFORTS, STRATEGIES, TEMPERATURES } from './modes';
+import type { Effort, Mode, Strategy, Temperature } from './modes';
+import type { ConversationScope } from './conversation-scope';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -23,15 +24,27 @@ export interface Result {
   error: string | null;
 }
 
-export interface Answer {
+interface BaseAnswer {
   question: string;
   date: string;
   mode: Mode;
-  // Absent only in local history imported from before effort controls existed.
-  effort?: Effort;
   tokens: number | null;
   results: Result[];
 }
+
+export interface ReasoningAnswer extends BaseAnswer {
+  // Absent only in local history imported from before effort controls existed.
+  effort?: Effort;
+  temperature?: never;
+}
+
+export interface TemperatureAnswer extends BaseAnswer {
+  mode: 'direct';
+  effort: null;
+  temperature: Temperature;
+}
+
+export type Answer = ReasoningAnswer | TemperatureAnswer;
 
 const ISO_DATETIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const EXPECTED_STAGES: Record<Strategy, readonly Stage['name'][]> = {
@@ -73,12 +86,19 @@ function isResult(data: unknown, mode: Strategy): data is Result {
     data.tokens >= stages.reduce((sum, stage) => sum + stage.tokens, 0);
 }
 
-export function isAnswer(data: unknown, question: string, mode: Mode, effort?: Effort): data is Answer {
+export function isAnswer(data: unknown, question: string, mode: Mode, expected?: ConversationScope): data is Answer {
   if (!isRecord(data)) return false;
   const hasEffort = 'effort' in data;
-  if (Object.keys(data).length !== (hasEffort ? 6 : 5)) return false;
-  if (effort !== undefined && data.effort !== effort) return false;
-  if (hasEffort && !EFFORTS.includes(data.effort as Effort)) return false;
+  const hasTemperature = 'temperature' in data;
+  let fieldCount = 5;
+  if (hasEffort) fieldCount = 6;
+  if (hasTemperature) fieldCount = 7;
+  if (Object.keys(data).length !== fieldCount) return false;
+  if (hasTemperature) {
+    if (data.mode !== 'direct' || data.effort !== null || !TEMPERATURES.includes(data.temperature as Temperature)) return false;
+  } else if (hasEffort && !EFFORTS.includes(data.effort as Effort)) return false;
+  if (expected?.workspace === 'temperature' && (!hasTemperature || data.temperature !== expected.temperature)) return false;
+  if (expected?.workspace === 'reasoning' && (hasTemperature || data.effort !== expected.effort)) return false;
   if (data.question !== question || !isText(question) || data.mode !== mode) return false;
   if (typeof data.date !== 'string' || !ISO_DATETIME_PATTERN.test(data.date) || !Number.isFinite(Date.parse(data.date))) return false;
 
@@ -98,13 +118,14 @@ export function isAnswer(data: unknown, question: string, mode: Mode, effort?: E
 }
 
 export async function askQuestion(
-  question: string, mode: Mode, history: History, signal: AbortSignal, effort: Effort = 'low',
+  question: string, scope: ConversationScope, history: History, signal: AbortSignal,
   conversationId?: string,
 ): Promise<Answer> {
+  const settings = scope.workspace === 'temperature' ? { temperature: scope.temperature } : { effort: scope.effort };
   const response = await fetch('/api/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, mode, effort, history, conversation_id: conversationId }),
+    body: JSON.stringify({ question, mode: scope.mode, ...settings, history, conversation_id: conversationId }),
     signal,
   });
 
@@ -120,7 +141,7 @@ export async function askQuestion(
     throw new Error(typeof detail === 'string' ? detail : 'Не удалось получить ответ. Попробуйте позже.');
   }
 
-  if (!isAnswer(data, question, mode, effort)) {
+  if (!isAnswer(data, question, scope.mode, scope)) {
     throw new Error('Сервер вернул некорректный ответ. Попробуйте ещё раз.');
   }
   return data;

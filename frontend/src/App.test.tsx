@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -7,7 +7,14 @@ import type { Answer } from './api';
 import { LEGACY_STORAGE_KEY, STORAGE_KEY } from './conversations';
 import { GENERATION_KEY } from './conversation-store';
 import { MODE_LABELS, MODES } from './modes';
-import { makeAnswer } from './test-fixtures';
+import type { Effort, Mode } from './modes';
+import { makeAnswer, makeTemperatureAnswer } from './test-fixtures';
+import type { ConversationScope } from './conversation-scope';
+import { useConversationController } from './use-conversation-controller';
+
+const reasoning = (mode: Mode = 'direct', effort: Effort = 'low') => ({ workspace: 'reasoning' as const, mode, effort });
+const answerFor = (question: string, scope: ConversationScope): Answer => scope.workspace === 'reasoning'
+  ? makeAnswer(question, scope.mode, scope.effort) : makeTemperatureAnswer(question, scope.temperature);
 
 vi.mock('./api', async (importOriginal) => ({
   ...await importOriginal<typeof import('./api')>(), askQuestion: vi.fn(),
@@ -21,11 +28,70 @@ function submit(question = 'Привет', container?: HTMLElement) {
   fireEvent.submit(input.closest('form')!);
 }
 
+function selectWorkspace(name: 'Температура' | 'Подходы к решению', container?: HTMLElement): void {
+  const ui = container ? within(container) : screen;
+  fireEvent.click(ui.getByRole('button', { name: 'Открыть меню' }));
+  fireEvent.click(within(ui.getByRole('dialog')).getByRole('button', { name }));
+}
+
 describe('App', () => {
   beforeEach(() => {
     localStorage.clear();
     mockAsk.mockReset();
-    mockAsk.mockImplementation(async (question, mode, _history, _signal, effort) => makeAnswer(question, mode, effort));
+    mockAsk.mockImplementation(async (question, scope) => answerFor(question, scope));
+  });
+
+  it('uses one controller for independent temperature and reasoning drafts and background replies', async () => {
+    const pending: { resolve: (answer: Answer) => void; answer: Answer }[] = [];
+    mockAsk.mockImplementation((question, scope) => new Promise((resolve) => pending.push({ resolve, answer: answerFor(question, scope) })));
+    const low: ConversationScope = { workspace: 'temperature', temperature: 0, mode: 'direct' };
+    const high: ConversationScope = { workspace: 'temperature', temperature: 1.2, mode: 'direct' };
+    const { result, rerender } = renderHook(({ scope }: { scope: ConversationScope }) => useConversationController(scope), { initialProps: { scope: low } as { scope: ConversationScope } });
+    act(() => result.current.updateDraft('Низкая'));
+    act(() => { void result.current.handleSubmit(); });
+    await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(1));
+    rerender({ scope: high });
+    expect(result.current.question).toBe('');
+    act(() => result.current.updateDraft('Высокая'));
+    act(() => { void result.current.handleSubmit(); });
+    await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(2));
+    rerender({ scope: reasoning() });
+    act(() => result.current.updateDraft('Черновик рассуждений'));
+    await act(async () => pending[0].resolve(pending[0].answer));
+    expect(result.current.question).toBe('Черновик рассуждений');
+    expect(result.current.turns).toEqual([]);
+    rerender({ scope: low });
+    expect(result.current.question).toBe('');
+    expect(result.current.turns[0].response).toEqual(pending[0].answer);
+    rerender({ scope: high });
+    expect(result.current.question).toBe('Высокая');
+    expect(result.current.isSubmitting).toBe(true);
+    await act(async () => pending[1].resolve(pending[1].answer));
+    expect(result.current.question).toBe('');
+    expect(mockAsk.mock.calls[0][1]).toEqual(low);
+    expect(mockAsk.mock.calls[0][2]).toEqual({ direct: [] });
+  });
+
+  it('clears pending requests and drafts across both controller scopes and ignores late replies', async () => {
+    const pending: { resolve: (answer: Answer) => void; answer: Answer }[] = [];
+    mockAsk.mockImplementation((question, scope) => new Promise((resolve) => pending.push({ resolve, answer: answerFor(question, scope) })));
+    const temperature: ConversationScope = { workspace: 'temperature', temperature: 0.7, mode: 'direct' };
+    const { result, rerender } = renderHook(({ scope }: { scope: ConversationScope }) => useConversationController(scope), { initialProps: { scope: temperature } as { scope: ConversationScope } });
+    for (const scope of [temperature, reasoning()]) {
+      rerender({ scope });
+      act(() => result.current.updateDraft('Ожидание'));
+      act(() => { void result.current.handleSubmit(); });
+      await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(scope.workspace === 'temperature' ? 1 : 2));
+    }
+    await act(async () => result.current.clearHistory());
+    expect(mockAsk.mock.calls.every((call) => call[3].aborted)).toBe(true);
+    await act(async () => pending.forEach(({ resolve, answer }) => resolve(answer)));
+    for (const scope of [temperature, reasoning()]) {
+      rerender({ scope });
+      expect(result.current.turns).toEqual([]);
+      expect(result.current.question).toBe('');
+    }
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
   it('shows two reasoning tabs above five method tabs and a neutral data-sharing notice', () => {
@@ -36,6 +102,96 @@ describe('App', () => {
     expect(screen.getByRole('tab', { name: 'Прямой ответ' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByText(/DeepSeek|OpenCode/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Вопрос и история отправляются внешнему ИИ-сервису/)).toBeInTheDocument();
+  });
+
+  it('keeps the original effort, method and draft when navigating with the menu', () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Максимум рассуждений' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Команда ролей' }));
+    fireEvent.change(screen.getByLabelText('Ваш вопрос'), { target: { value: 'Черновик ролей' } });
+    for (const name of ['Температура', 'Подходы к решению']) {
+      fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    }
+    expect(screen.getByRole('tab', { name: 'Максимум рассуждений' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Команда ролей' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Ваш вопрос')).toHaveValue('Черновик ролей');
+    expect(mockAsk).not.toHaveBeenCalled();
+  });
+
+  it('shows only three temperature tabs with medium selected and rejects empty questions', () => {
+    render(<App />);
+    selectWorkspace('Температура');
+    const tabs = screen.getByRole('tablist', { name: 'Температура генерации' });
+    expect(within(tabs).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Низкая', 'Средняя', 'Высокая']);
+    expect(screen.getByRole('tab', { name: 'Средняя' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText(/Рассуждения отключены/)).toHaveTextContent('temperature = 0.7');
+    expect(screen.queryByRole('tablist', { name: 'Режим рассуждений' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tablist', { name: 'Способ решения' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /отправить/i })).toBeDisabled();
+    submit('   ');
+    expect(mockAsk).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Низкая', 0], ['Средняя', 0.7], ['Высокая', 1.2],
+  ] as const)('sends exactly one direct request for %s', async (name, temperature) => {
+    render(<App />);
+    selectWorkspace('Температура');
+    fireEvent.click(screen.getByRole('tab', { name }));
+    submit();
+    await screen.findByText('Ответ модели');
+    expect(mockAsk).toHaveBeenCalledExactlyOnceWith('Привет', {
+      workspace: 'temperature', temperature, mode: 'direct',
+    }, { direct: [] }, expect.any(AbortSignal), expect.any(String));
+    expect(screen.getByRole('tabpanel', { name })).toHaveAttribute('aria-labelledby', `tab-temperature-${temperature}`);
+  });
+
+  it.each(['Control', 'Meta'])('navigates temperature tabs and submits with %s+Enter', async (modifier) => {
+    const user = userEvent.setup();
+    render(<App />);
+    selectWorkspace('Температура');
+    await user.click(screen.getByRole('tab', { name: 'Средняя' }));
+    for (const [key, name] of [['ArrowRight', 'Высокая'], ['Home', 'Низкая'], ['End', 'Высокая']]) {
+      await user.keyboard(`{${key}}`);
+      expect(screen.getByRole('tab', { name })).toHaveFocus();
+      expect(screen.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
+    }
+    await user.type(screen.getByLabelText('Ваш вопрос'), 'Привет');
+    await user.keyboard(`{${modifier}>}{Enter}{/${modifier}}`);
+    await screen.findByText('Ответ модели');
+    expect(mockAsk.mock.calls[0][1]).toEqual({ workspace: 'temperature', mode: 'direct', temperature: 1.2 });
+  });
+
+  it('isolates, restores and continues temperature history without borrowing the original direct context', async () => {
+    const first = render(<App />);
+    submit('Исходный');
+    await screen.findByText('Ответ модели');
+    selectWorkspace('Температура');
+    fireEvent.click(screen.getByRole('tab', { name: 'Низкая' }));
+    submit('Температурный');
+    await screen.findByText('Ответ модели');
+    expect(mockAsk.mock.calls[1][2]).toEqual({ direct: [] });
+    fireEvent.change(screen.getByLabelText('Ваш вопрос'), { target: { value: 'Черновик низкой' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Высокая' }));
+    expect(screen.getByLabelText('Ваш вопрос')).toHaveValue('');
+    expect(screen.queryByText('Температурный')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Низкая' }));
+    expect(screen.getByLabelText('Ваш вопрос')).toHaveValue('Черновик низкой');
+    selectWorkspace('Подходы к решению');
+    expect(screen.getByText('Исходный')).toBeInTheDocument();
+    first.unmount();
+    render(<App />);
+    selectWorkspace('Температура');
+    fireEvent.click(screen.getByRole('tab', { name: 'Низкая' }));
+    expect(screen.getByText('Температурный')).toBeInTheDocument();
+    expect(screen.getByLabelText('Ваш вопрос')).toHaveValue('');
+    submit('Уточнение');
+    await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(3));
+    expect(mockAsk.mock.calls[2][2]).toEqual({ direct: [
+      { role: 'user', content: 'Температурный' }, { role: 'assistant', content: 'Ответ модели' },
+    ] });
   });
 
   it('rejects empty and whitespace-only questions', () => {
@@ -68,17 +224,17 @@ describe('App', () => {
     render(<App />);
     submit('  Привет  ');
     expect(await screen.findByText('Ответ модели')).toBeInTheDocument();
-    expect(mockAsk).toHaveBeenNthCalledWith(1, 'Привет', 'direct', { direct: [] }, expect.any(AbortSignal), 'low', expect.any(String));
+    expect(mockAsk).toHaveBeenNthCalledWith(1, 'Привет', reasoning(), { direct: [] }, expect.any(AbortSignal), expect.any(String));
     expect(screen.getByText('Привет', { selector: 'p' })).toHaveClass('answer-question');
     expect(screen.getByText('Токенов потрачено: 142')).toBeInTheDocument();
     expect(document.querySelector('time')).toHaveAttribute('datetime', '2026-11-03T12:30:00Z');
-    expect(screen.getByLabelText('Ваш вопрос')).toHaveValue('');
+    await waitFor(() => expect(screen.getByLabelText('Ваш вопрос')).toHaveValue(''));
 
     submit('Уточни');
     await waitFor(() => expect(screen.getAllByText('Ответ модели')).toHaveLength(2));
-    expect(mockAsk).toHaveBeenNthCalledWith(2, 'Уточни', 'direct', { direct: [
+    expect(mockAsk).toHaveBeenNthCalledWith(2, 'Уточни', reasoning(), { direct: [
       { role: 'user', content: 'Привет' }, { role: 'assistant', content: 'Ответ модели' },
-    ] }, expect.any(AbortSignal), 'low', mockAsk.mock.calls[0][5]);
+    ] }, expect.any(AbortSignal), mockAsk.mock.calls[0][4]);
     expect(screen.getByText('Привет')).toBeInTheDocument();
   });
 
@@ -88,7 +244,7 @@ describe('App', () => {
     submit();
     await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByText('Получаем ответ…')).not.toBeInTheDocument());
-    expect(mockAsk.mock.calls[0][1]).toBe(mode);
+    expect(mockAsk.mock.calls[0][1].mode).toBe(mode);
     expect(screen.getByRole('tabpanel', { name: MODE_LABELS[mode] })).toHaveAttribute('aria-labelledby', `tab-${mode}`);
     expect(screen.getAllByText('Ответ модели')).toHaveLength(mode === 'compare' ? 4 : 1);
   });
@@ -103,7 +259,7 @@ describe('App', () => {
     expect(screen.getByLabelText('Ваш вопрос')).toHaveValue('');
     submit('Другой вопрос');
     await screen.findByText('Ответ модели');
-    expect(mockAsk).toHaveBeenNthCalledWith(2, 'Другой вопрос', 'steps', { steps: [] }, expect.any(AbortSignal), 'low', expect.any(String));
+    expect(mockAsk).toHaveBeenNthCalledWith(2, 'Другой вопрос', reasoning('steps'), { steps: [] }, expect.any(AbortSignal), expect.any(String));
     fireEvent.click(screen.getByRole('tab', { name: 'Прямой ответ' }));
     expect(screen.getByText('Прямой вопрос')).toBeInTheDocument();
     expect(screen.queryByText('Другой вопрос')).not.toBeInTheDocument();
@@ -128,7 +284,7 @@ describe('App', () => {
     expect(history[0].content).toBe('Ролевой вопрос');
     expect(history[1].content).toContain('Разбор задачи');
     expect(history[1].content).toContain('Ответ модели');
-    expect(mockAsk.mock.calls[2][5]).toBe(mockAsk.mock.calls[1][5]);
+    expect(mockAsk.mock.calls[2][4]).toBe(mockAsk.mock.calls[1][4]);
     await waitFor(() => expect(screen.queryByText('Получаем ответ…')).not.toBeInTheDocument());
   });
 
@@ -142,7 +298,7 @@ describe('App', () => {
     expect(screen.getByLabelText('Ваш вопрос')).toHaveValue('');
     submit('Вопрос максимуму');
     await screen.findByText('Ответ модели');
-    expect(mockAsk).toHaveBeenNthCalledWith(2, 'Вопрос максимуму', 'direct', { direct: [] }, expect.any(AbortSignal), 'max', expect.any(String));
+    expect(mockAsk).toHaveBeenNthCalledWith(2, 'Вопрос максимуму', reasoning('direct', 'max'), { direct: [] }, expect.any(AbortSignal), expect.any(String));
     expect(screen.getByText('effort: max')).toBeInTheDocument();
     submit('Уточнение максимуму');
     await waitFor(() => expect(screen.getAllByText('Ответ модели')).toHaveLength(2));
@@ -162,8 +318,8 @@ describe('App', () => {
 
   it('keeps simultaneous requests in different effort profiles independent and clears both', async () => {
     const pending: { resolve: (answer: Answer) => void; answer: Answer }[] = [];
-    mockAsk.mockImplementation((question, mode, _history, _signal, effort) => new Promise((resolve) => {
-      pending.push({ resolve, answer: makeAnswer(question, mode, effort) });
+    mockAsk.mockImplementation((question, scope) => new Promise((resolve) => {
+      pending.push({ resolve, answer: answerFor(question, scope) });
     }));
     render(<App />);
     submit('Минимум');
@@ -236,7 +392,7 @@ describe('App', () => {
     await user.type(screen.getByLabelText('Ваш вопрос'), 'Привет');
     await user.keyboard('{Control>}{Enter}{/Control}');
     expect(await screen.findByText('Ответ модели')).toBeInTheDocument();
-    expect(mockAsk.mock.calls[0][1]).toBe('steps');
+    expect(mockAsk.mock.calls[0][1].mode).toBe('steps');
   });
 
   it('renders provider HTML as text, including intermediate stages', async () => {
@@ -297,7 +453,7 @@ describe('App', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Очистить историю' })));
     submit('Новый вопрос');
     await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(2));
-    expect(mockAsk.mock.calls[1][5]).not.toBe(mockAsk.mock.calls[0][5]);
+    expect(mockAsk.mock.calls[1][4]).not.toBe(mockAsk.mock.calls[0][4]);
 
     await act(async () => pending[0](makeAnswer('Старый вопрос')));
     expect(screen.queryByText('Старый вопрос')).not.toBeInTheDocument();
@@ -321,7 +477,7 @@ describe('App', () => {
     expect(mockAsk.mock.calls[1][2].direct).toEqual([
       { role: 'user', content: 'Первый вопрос' }, { role: 'assistant', content: 'Ответ модели' },
     ]);
-    expect(mockAsk.mock.calls[1][5]).toBe(mockAsk.mock.calls[0][5]);
+    expect(mockAsk.mock.calls[1][4]).toBe(mockAsk.mock.calls[0][4]);
     await act(async () => window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY })));
     expect(within(first.container).getAllByText('Ответ модели')).toHaveLength(2);
   });
@@ -337,7 +493,7 @@ describe('App', () => {
     mockAsk.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
     submit('Долгий вопрос', second.container);
     await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(2));
-    const oldGeneration = mockAsk.mock.calls[1][5];
+    const oldGeneration = mockAsk.mock.calls[1][4];
     await act(async () => fireEvent.click(within(first.container).getByRole('button', { name: 'Очистить историю' })));
     await act(async () => window.dispatchEvent(new StorageEvent('storage', { key: GENERATION_KEY })));
     expect(mockAsk.mock.calls[1][3].aborted).toBe(true);
@@ -347,10 +503,10 @@ describe('App', () => {
     submit('Новая задача', second.container);
     await within(second.container).findByText('Ответ модели');
     expect(mockAsk.mock.calls[2][2]).toEqual({ direct: [] });
-    expect(mockAsk.mock.calls[2][5]).not.toBe(oldGeneration);
+    expect(mockAsk.mock.calls[2][4]).not.toBe(oldGeneration);
     await act(async () => resolve(makeAnswer('Долгий вопрос')));
     expect(within(second.container).getAllByText('Ответ модели')).toHaveLength(1);
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).low.direct.map((turn: { question: string }) => turn.question)).toEqual(['Новая задача']);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)['reasoning:low:direct'].map((turn: { question: string }) => turn.question)).toEqual(['Новая задача']);
   });
 
   it('rejects a late browser-tab reply when a clear notification has not arrived yet', async () => {
@@ -398,7 +554,7 @@ describe('App', () => {
     });
     expect(mockAsk).toHaveBeenCalledTimes(1);
     await act(async () => resolve(makeAnswer('Первый')));
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).low.direct).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)['reasoning:low:direct']).toHaveLength(1);
     expect(within(second.container).getByRole('textbox')).toHaveValue('Второй');
   });
 

@@ -7,6 +7,20 @@ import { createTestLocks } from './test-locks';
 const { jsdom } = globalThis as typeof globalThis & { jsdom: { window: Window } };
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: jsdom.window.localStorage });
 
+// jsdom lacks native modal focus/inert behavior; real-browser checks cover that.
+if (!HTMLDialogElement.prototype.showModal) {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute('open', '');
+    this.querySelector<HTMLElement>('[autofocus]')?.focus();
+  };
+}
+if (!HTMLDialogElement.prototype.close) {
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute('open');
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 beforeEach(() => {
   Object.defineProperty(navigator, 'locks', { configurable: true, value: createTestLocks() });
 });

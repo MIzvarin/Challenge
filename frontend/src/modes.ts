@@ -4,6 +4,15 @@ export type Strategy = typeof STRATEGIES[number];
 export type Mode = typeof MODES[number];
 export const EFFORTS = ['low', 'max'] as const;
 export type Effort = typeof EFFORTS[number];
+export const TEMPERATURES = [0, 0.7, 1.2] as const;
+export type Temperature = typeof TEMPERATURES[number];
+export const TEMPERATURE_LABELS: Record<Temperature, string> = {
+  0: 'Низкая',
+  0.7: 'Средняя',
+  1.2: 'Высокая',
+};
+export const WORKSPACE_LABELS = { reasoning: 'Подходы к решению', temperature: 'Температура' } as const;
+export type Workspace = keyof typeof WORKSPACE_LABELS;
 
 export const EFFORT_LABELS: Record<Effort, string> = {
   low: 'Минимум рассуждений',

@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import type { Result } from '../api';
+import type { Answer, Result } from '../api';
 import { isPendingTurn } from '../conversations';
 import type { Turn } from '../conversations';
 import { MODE_LABELS, STAGE_LABELS } from '../modes';
@@ -7,6 +7,11 @@ import { MODE_LABELS, STAGE_LABELS } from '../modes';
 interface ResultPanelProps {
   result: Result;
   comparison: boolean;
+}
+
+function generationMetadata(response: Answer): string {
+  if (response.temperature !== undefined) return `temperature: ${response.temperature} · Рассуждения отключены`;
+  return response.effort ? `effort: ${response.effort}` : 'До настройки effort';
 }
 
 function ResultPanel({ result, comparison }: ResultPanelProps): ReactElement {
@@ -66,7 +71,7 @@ export function AnswerPanel({ turns }: AnswerPanelProps): ReactElement {
                   <time dateTime={date}>
                     {new Date(date).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}
                   </time>
-                  {response && <span>{response.effort ? `effort: ${response.effort}` : 'До настройки effort'}</span>}
+                  {response && <span>{generationMetadata(response)}</span>}
                   {comparison && response.tokens !== null && (
                     <span>Всего токенов: {response.tokens.toLocaleString('ru-RU')}</span>
                   )}

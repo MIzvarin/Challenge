@@ -9,6 +9,33 @@ from app.solver import LANGUAGE_INSTRUCTION
 from test_api import completion, make_client
 
 
+def test_temperature_sessions_are_stable_isolated_and_keep_old_identifiers():
+    sessions = []
+    generation = uuid4()
+
+    def handler(request):
+        sessions.append(request.headers["x-opencode-session"])
+        return httpx.Response(200, json=completion())
+
+    with make_client(handler) as client:
+        for temperature in (0, 0.0, 0.7, 0.7, 1.2):
+            assert client.post("/api/ask", json={
+                "question": "Вопрос", "temperature": temperature, "conversation_id": str(generation),
+            }).status_code == 200
+        for effort in ("low", "max"):
+            assert client.post("/api/ask", json={
+                "question": "Вопрос", "effort": effort, "conversation_id": str(generation),
+            }).status_code == 200
+        assert client.post("/api/ask", json={
+            "question": "Вопрос", "temperature": 0.7, "conversation_id": str(uuid4()),
+        }).status_code == 200
+    assert sessions[0] == sessions[1]
+    assert sessions[2] == sessions[3]
+    assert len(set(sessions)) == 6
+    assert sessions[5] == str(uuid5(generation, "low:direct:direct"))
+    assert sessions[6] == str(uuid5(generation, "max:direct:direct"))
+
+
 def test_steps_add_instruction_and_preserve_entire_history():
     history = [
         {"role": "user", "content": "Исходная задача"},
@@ -238,6 +265,7 @@ def test_every_stage_uses_selected_effort_without_inventing_a_budget(effort, mod
         calls.append(payload)
         assert payload["thinking"] == {"type": "enabled"}
         assert payload["reasoning_effort"] == effort
+        assert "temperature" not in payload
         assert "budget_tokens" not in str(payload)
         assert "max_tokens" not in payload
         assert "max_completion_tokens" not in payload

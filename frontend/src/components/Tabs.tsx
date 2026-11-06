@@ -1,8 +1,8 @@
 import type { ReactElement } from 'react';
-import { EFFORTS, EFFORT_LABELS, MODES, MODE_LABELS } from '../modes';
-import type { Effort, Mode } from '../modes';
+import { EFFORTS, EFFORT_LABELS, MODES, MODE_LABELS, TEMPERATURES, TEMPERATURE_LABELS } from '../modes';
+import type { Effort, Mode, Temperature } from '../modes';
 
-interface TabsProps<T extends string> {
+interface TabsProps<T extends string | number> {
   selected: T;
   onSelect: (value: T) => void;
   values: readonly T[];
@@ -12,7 +12,7 @@ interface TabsProps<T extends string> {
   numbered?: boolean;
 }
 
-function Tabs<T extends string>({ selected, onSelect, values, labels, label, prefix, numbered = false }: TabsProps<T>): ReactElement {
+function Tabs<T extends string | number>({ selected, onSelect, values, labels, label, prefix, numbered = false }: TabsProps<T>): ReactElement {
   return (
     <div className={numbered ? 'mode-tabs' : 'effort-tabs'} role="tablist" aria-label={label}>
       {values.map((value, index) => (
@@ -51,4 +51,8 @@ export function ModeTabs(props: Pick<TabsProps<Mode>, 'selected' | 'onSelect'>):
 
 export function EffortTabs(props: Pick<TabsProps<Effort>, 'selected' | 'onSelect'>): ReactElement {
   return <Tabs {...props} values={EFFORTS} labels={EFFORT_LABELS} label="Режим рассуждений" prefix="effort-" />;
+}
+
+export function TemperatureTabs(props: Pick<TabsProps<Temperature>, 'selected' | 'onSelect'>): ReactElement {
+  return <Tabs {...props} values={TEMPERATURES} labels={TEMPERATURE_LABELS} label="Температура генерации" prefix="temperature-" />;
 }

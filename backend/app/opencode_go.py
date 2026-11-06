@@ -3,7 +3,6 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from .config import Settings
-from .schemas import Effort
 
 API_BASE_URL = "https://opencode.ai/inference/go/openai/v1/"
 USER_AGENT = "challenge-qa/0.1"
@@ -96,7 +95,7 @@ async def complete(
     settings: Settings,
     client: httpx.AsyncClient,
     session_id: str,
-    effort: Effort,
+    generation_parameters: dict[str, object],
 ) -> tuple[str, int]:
     try:
         response = await client.post(
@@ -111,8 +110,7 @@ async def complete(
                 "model": settings.model,
                 "messages": messages,
                 # Use DeepSeek's native switch, not OpenRouter's reasoning object.
-                "thinking": {"type": "enabled"},
-                "reasoning_effort": effort,
+                **generation_parameters,
                 "stream": False,
             },
         )

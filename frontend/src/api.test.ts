@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import { askQuestion } from './api';
-import { makeAnswer, makeResult } from './test-fixtures';
+import { makeAnswer, makeResult, makeTemperatureAnswer } from './test-fixtures';
+import type { Effort, Mode, Temperature } from './modes';
+
+const reasoning = (mode: Mode = 'direct', effort: Effort = 'low') => ({ workspace: 'reasoning' as const, mode, effort });
+const temperatureScope = (temperature: Temperature) => ({ workspace: 'temperature' as const, mode: 'direct' as const, temperature });
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -14,15 +18,39 @@ function mockJsonResponse(data: unknown, status = 200): Mock<typeof fetch> {
 }
 
 function ask() {
-  return askQuestion('Привет', 'direct', {}, new AbortController().signal);
+  return askQuestion('Привет', reasoning(), {}, new AbortController().signal);
 }
 
 describe('askQuestion', () => {
+  it.each([0, 0.7, 1.2] as const)('sends temperature %s without effort', async (temperature) => {
+    const response = makeTemperatureAnswer('Привет', temperature);
+    const fetchMock = mockJsonResponse(response);
+    expect(await askQuestion('Привет', temperatureScope(temperature), {}, new AbortController().signal)).toEqual(response);
+    expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({
+      question: 'Привет', mode: 'direct', temperature, history: {},
+    });
+  });
+
+  it.each([
+    { temperature: 0.7 }, { temperature: undefined }, { temperature: null }, { temperature: '0' },
+    { effort: 'low' }, { effort: undefined }, { extra: true }, { mode: 'compare' },
+  ])('rejects incorrect temperature metadata: %j', async (changes) => {
+    mockJsonResponse({ ...makeTemperatureAnswer('Привет', 0), ...changes });
+    await expect(askQuestion('Привет', temperatureScope(0), {}, new AbortController().signal)).rejects.toThrow('некорректный ответ');
+  });
+
+  it('never accepts a response from the other workspace', async () => {
+    mockJsonResponse(makeAnswer());
+    await expect(askQuestion('Привет', temperatureScope(0), {}, new AbortController().signal)).rejects.toThrow();
+    mockJsonResponse(makeTemperatureAnswer());
+    await expect(ask()).rejects.toThrow();
+  });
+
   it('sends mode and full history only to the local backend without an API key', async () => {
     const fetchMock = mockJsonResponse(result);
     const signal = new AbortController().signal;
     const history = { direct: [{ role: 'user' as const, content: 'Ранее' }, { role: 'assistant' as const, content: 'Ответ' }] };
-    expect(await askQuestion('Привет', 'direct', history, signal)).toEqual(result);
+    expect(await askQuestion('Привет', reasoning(), history, signal)).toEqual(result);
     expect(fetchMock).toHaveBeenCalledWith('/api/ask', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: 'Привет', mode: 'direct', effort: 'low', history }), signal,
@@ -37,7 +65,7 @@ describe('askQuestion', () => {
   it('sends the persisted conversation ID to the backend', async () => {
     const fetchMock = mockJsonResponse(result);
     const conversationId = crypto.randomUUID();
-    await askQuestion('Привет', 'direct', {}, new AbortController().signal, 'low', conversationId);
+    await askQuestion('Привет', reasoning(), {}, new AbortController().signal, conversationId);
     expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string).conversation_id).toBe(conversationId);
   });
 
@@ -45,7 +73,7 @@ describe('askQuestion', () => {
     const question = 'Задача'.repeat(4000);
     const response = makeAnswer(question);
     mockJsonResponse(response);
-    expect(await askQuestion(question, 'direct', {}, new AbortController().signal)).toEqual(response);
+    expect(await askQuestion(question, reasoning(), {}, new AbortController().signal)).toEqual(response);
   });
 
   it('handles invalid JSON', async () => {
@@ -91,10 +119,10 @@ describe('askQuestion', () => {
     const response = makeAnswer('Привет', 'direct', 'max');
     const fetchMock = mockJsonResponse(response);
     const signal = new AbortController().signal;
-    expect(await askQuestion('Привет', 'direct', {}, signal, 'max')).toEqual(response);
+    expect(await askQuestion('Привет', reasoning('direct', 'max'), {}, signal)).toEqual(response);
     expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string).effort).toBe('max');
     mockJsonResponse(makeAnswer());
-    await expect(askQuestion('Привет', 'direct', {}, signal, 'max')).rejects.toThrow('некорректный ответ');
+    await expect(askQuestion('Привет', reasoning('direct', 'max'), {}, signal)).rejects.toThrow('некорректный ответ');
   });
 
   it.each(['2026-11-03T12:30:00.123456Z', '2026-11-03T15:30:00+03:00'])(
@@ -109,21 +137,21 @@ describe('askQuestion', () => {
     response.results[index] = { ...response.results[index], answer: null, error: 'Ошибка', tokens: null };
     response.tokens = null;
     mockJsonResponse(response);
-    expect(await askQuestion('Привет', 'compare', {}, new AbortController().signal)).toEqual(response);
+    expect(await askQuestion('Привет', reasoning('compare'), {}, new AbortController().signal)).toEqual(response);
   });
 
   it('rejects duplicated or missing comparison strategies', async () => {
     const response = makeAnswer('Привет', 'compare');
     response.results[3] = response.results[0];
     mockJsonResponse(response);
-    await expect(askQuestion('Привет', 'compare', {}, new AbortController().signal)).rejects.toThrow('некорректный ответ');
+    await expect(askQuestion('Привет', reasoning('compare'), {}, new AbortController().signal)).rejects.toThrow('некорректный ответ');
   });
 
   it.each(['prompt', 'roles'] as const)('requires intermediate stages for successful %s results', async (mode) => {
     const response = makeAnswer('Привет', mode);
     response.results[0].stages = [];
     mockJsonResponse(response);
-    await expect(askQuestion('Привет', mode, {}, new AbortController().signal)).rejects.toThrow('некорректный ответ');
+    await expect(askQuestion('Привет', reasoning(mode), {}, new AbortController().signal)).rejects.toThrow('некорректный ответ');
   });
 
   it.each([
@@ -136,6 +164,6 @@ describe('askQuestion', () => {
     const results = [...response.results];
     const failed = { ...results[3], answer: null, tokens: null, error: 'Ошибка', stages };
     mockJsonResponse({ ...response, tokens: null, results: [...results.slice(0, 3), failed] });
-    await expect(askQuestion('Привет', 'compare', {}, new AbortController().signal)).rejects.toThrow('некорректный ответ');
+    await expect(askQuestion('Привет', reasoning('compare'), {}, new AbortController().signal)).rejects.toThrow('некорректный ответ');
   });
 });

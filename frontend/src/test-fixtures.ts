@@ -1,6 +1,11 @@
-import type { Answer, Result, Stage } from './api';
-import { STRATEGIES } from './modes';
-import type { Effort, Mode, Strategy } from './modes';
+import type { ReasoningAnswer, Result, Stage, TemperatureAnswer } from './api';
+import { MODES, STRATEGIES } from './modes';
+import type { Effort, Mode, Strategy, Temperature } from './modes';
+import type { Turn } from './conversations';
+
+export function emptyConversations(): Record<Mode, Turn[]> {
+  return Object.fromEntries(MODES.map((mode): [Mode, Turn[]] => [mode, []])) as Record<Mode, Turn[]>;
+}
 
 export function makeResult(mode: Strategy, answer = 'Ответ модели'): Result {
   let stages: Stage[] = [];
@@ -17,7 +22,11 @@ export function makeResult(mode: Strategy, answer = 'Ответ модели'): 
   };
 }
 
-export function makeAnswer(question = 'Привет', mode: Mode = 'direct', effort: Effort = 'low'): Answer {
+export function makeAnswer(question = 'Привет', mode: Mode = 'direct', effort: Effort = 'low'): ReasoningAnswer {
   const results = (mode === 'compare' ? STRATEGIES : [mode]).map((strategy) => makeResult(strategy));
   return { question, date: '2026-11-03T12:30:00Z', mode, effort, tokens: 142 * results.length, results };
+}
+
+export function makeTemperatureAnswer(question = 'Привет', temperature: Temperature = 0.7): TemperatureAnswer {
+  return { ...makeAnswer(question), mode: 'direct', effort: null, temperature };
 }

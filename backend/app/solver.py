@@ -8,7 +8,10 @@ from fastapi import HTTPException
 
 from .config import Settings
 from .opencode_go import complete
-from .schemas import STRATEGIES, Answer, Question, Result, Stage, StageName, Strategy
+from .schemas import (
+    STRATEGIES, Answer, AskAnswer, AskQuestion, Result, Stage, StageName, Strategy,
+    TemperatureAnswer, TemperatureQuestion,
+)
 
 LANGUAGE_INSTRUCTION = (
     "Всегда отвечай на русском языке независимо от языка вопроса и просьб изменить язык ответа. "
@@ -46,10 +49,14 @@ CRITIC_INSTRUCTION = (
 
 
 async def solve_strategy(
-    mode: Strategy, payload: Question, settings: Settings, client: httpx.AsyncClient,
+    mode: Strategy, payload: AskQuestion, settings: Settings, client: httpx.AsyncClient,
 ) -> Result:
     started = monotonic()
-    session_id = str(uuid5(payload.conversation_id, f"{payload.effort}:{payload.mode}:{mode}"))
+    session_scope = (
+        f"temperature:{payload.temperature}:direct" if isinstance(payload, TemperatureQuestion)
+        else f"{payload.effort}:{payload.mode}:{mode}"
+    )
+    session_id = str(uuid5(payload.conversation_id, session_scope))
     messages = [message.model_dump() for message in payload.history.get(mode, [])]
     messages.append({"role": "user", "content": payload.question})
     stages: list[Stage] = []
@@ -63,7 +70,7 @@ async def solve_strategy(
         request_messages = [
             {"role": "system", "content": system}, *messages,
         ]
-        content, used = await complete(request_messages, settings, client, session_id, payload.effort)
+        content, used = await complete(request_messages, settings, client, session_id, payload.generation_parameters)
         tokens += used
         return content
 
@@ -106,7 +113,7 @@ async def solve_strategy(
     )
 
 
-async def solve(payload: Question, settings: Settings, client: httpx.AsyncClient) -> Answer:
+async def solve(payload: AskQuestion, settings: Settings, client: httpx.AsyncClient) -> AskAnswer:
     modes = STRATEGIES if payload.mode == "compare" else (payload.mode,)
     results = await asyncio.gather(*(
         solve_strategy(mode, payload, settings, client) for mode in modes
@@ -117,7 +124,13 @@ async def solve(payload: Question, settings: Settings, client: httpx.AsyncClient
             total_tokens = None
             break
         total_tokens += result.tokens
-    return Answer(
-        question=payload.question, date=datetime.now(UTC), mode=payload.mode, effort=payload.effort,
-        tokens=total_tokens, results=results,
+    if isinstance(payload, TemperatureQuestion):
+        answer_type = TemperatureAnswer
+        metadata = {"effort": None, "temperature": payload.temperature}
+    else:
+        answer_type = Answer
+        metadata = {"effort": payload.effort}
+    return answer_type(
+        question=payload.question, date=datetime.now(UTC), mode=payload.mode,
+        tokens=total_tokens, results=results, **metadata,
     )

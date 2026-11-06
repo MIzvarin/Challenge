@@ -1,4 +1,4 @@
-import { emptyProfiles, LEGACY_STORAGE_KEY, loadConversations, saveConversations, STORAGE_KEY } from './conversations';
+import { emptyProfiles, HISTORY_STORAGE_KEYS, loadConversations, saveConversations } from './conversations';
 import type { Profiles } from './conversations';
 
 export const GENERATION_KEY = 'challenge.conversations.generation';
@@ -89,7 +89,7 @@ export function createConversationStore(): ConversationStore {
   }
 
   function handleStorage(event: StorageEvent): void {
-    if (event.key === null || [STORAGE_KEY, LEGACY_STORAGE_KEY, GENERATION_KEY].includes(event.key)) {
+    if (event.key === null || [...HISTORY_STORAGE_KEYS, GENERATION_KEY].includes(event.key)) {
       void refresh();
     }
   }
@@ -143,8 +143,7 @@ export function createConversationStore(): ConversationStore {
       try {
         // The lock makes removal and the new generation one atomic operation for other tabs.
         localStorage.removeItem(GENERATION_KEY);
-        localStorage.removeItem(STORAGE_KEY);
-        localStorage.removeItem(LEGACY_STORAGE_KEY);
+        for (const key of HISTORY_STORAGE_KEYS) localStorage.removeItem(key);
         localStorage.setItem(GENERATION_KEY, generation);
         lastStoredGeneration = generation;
         persistent = Boolean(locks);

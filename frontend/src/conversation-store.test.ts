@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createConversationStore, GENERATION_KEY } from './conversation-store';
-import { emptyProfiles, isPendingTurn, loadConversations, saveConversations, STORAGE_KEY } from './conversations';
+import { emptyProfiles, HISTORY_STORAGE_KEYS, isPendingTurn, loadConversations, saveConversations, STORAGE_KEY } from './conversations';
 import type { Profiles, Turn } from './conversations';
 import type { Effort, Mode } from './modes';
-import { makeAnswer } from './test-fixtures';
+import { makeAnswer, makeTemperatureAnswer } from './test-fixtures';
+import { conversationKey } from './conversation-scope';
 
 function turn(question: string, mode: Mode = 'direct', effort: Effort = 'low'): Turn {
   const response = makeAnswer(question, mode, effort);
@@ -11,7 +12,8 @@ function turn(question: string, mode: Mode = 'direct', effort: Effort = 'low'): 
 }
 
 function append(profiles: Profiles, item: Turn, mode: Mode = 'direct', effort: Effort = 'low'): Profiles {
-  return { ...profiles, [effort]: { ...profiles[effort], [mode]: [...profiles[effort][mode], item] } };
+  const key = conversationKey({ workspace: 'reasoning', effort, mode });
+  return { ...profiles, [key]: [...profiles[key], item] };
 }
 
 function deferred() {
@@ -23,6 +25,77 @@ function deferred() {
 describe('conversation store', () => {
   beforeEach(() => localStorage.clear());
 
+  it('clears every version and rejects old temperature replies without erasing a new conversation', async () => {
+    const first = createConversationStore();
+    const second = createConversationStore();
+    const response = makeTemperatureAnswer('Удалить', 0);
+    const item: Turn = { id: crypto.randomUUID(), question: response.question, date: response.date, response, error: null };
+    await first.update(({ conversations }) => ({ ...conversations, 'temperature:0:direct': [item] }));
+    const oldGeneration = first.getSnapshot().generation!;
+    for (const key of HISTORY_STORAGE_KEYS.slice(1)) localStorage.setItem(key, 'old text');
+    await second.clear();
+    for (const key of HISTORY_STORAGE_KEYS) expect(localStorage.getItem(key)).toBeNull();
+    expect(second.getSnapshot().generation).not.toBe(oldGeneration);
+    expect(second.getSnapshot().conversations).toEqual(emptyProfiles());
+    await second.update(({ conversations }) => append(conversations, turn('Новый')));
+    const stale = await first.update(({ conversations }) => ({ ...conversations, 'temperature:0:direct': [item] }), oldGeneration);
+    expect(stale.applied).toBe(false);
+    expect(first.getSnapshot().conversations['temperature:0:direct']).toEqual([]);
+    expect(first.getSnapshot().conversations['reasoning:low:direct'][0].question).toBe('Новый');
+  });
+
+  it('merges concurrent temperature and reasoning changes under the same lock', async () => {
+    const first = createConversationStore();
+    const second = createConversationStore();
+    const response = makeTemperatureAnswer('Температура', 0);
+    const item: Turn = { id: crypto.randomUUID(), question: response.question, date: response.date, response, error: null };
+    await Promise.all([
+      first.update(({ conversations }) => ({ ...conversations, 'temperature:0:direct': [item] })),
+      second.update(({ conversations }) => append(conversations, turn('Рассуждения'))),
+    ]);
+    await first.refresh();
+    expect(first.getSnapshot().conversations['temperature:0:direct']).toEqual([item]);
+    expect(first.getSnapshot().conversations['reasoning:low:direct']).toHaveLength(1);
+  });
+
+  it('keeps live temperature turns pending and refuses a duplicate while allowing other scopes', async () => {
+    const first = createConversationStore();
+    const second = createConversationStore();
+    const item: Turn = { ...turn('Ожидание'), response: null };
+    const started = deferred();
+    const finish = deferred();
+    const request = first.trackRequest(item.id, async () => {
+      await first.update(({ conversations }) => ({ ...conversations, 'temperature:0.7:direct': [item] }));
+      started.resolve();
+      await finish.promise;
+    });
+    await started.promise;
+    try {
+      await second.refresh();
+      expect(second.getSnapshot().conversations['temperature:0.7:direct'][0].error).toBeNull();
+      expect((await second.update(({ conversations }) => (
+        conversations['temperature:0.7:direct'].some(isPendingTurn) ? null : conversations
+      ))).applied).toBe(false);
+      expect((await second.update(({ conversations }) => append(conversations, turn('Другой раздел')))).applied).toBe(true);
+    } finally {
+      finish.resolve();
+      await request;
+    }
+    await second.refresh();
+    expect(second.getSnapshot().conversations['temperature:0.7:direct'][0].error).toContain('Запрос прерван');
+  });
+
+  it.each(HISTORY_STORAGE_KEYS)('refreshes on history version event %s', async (key) => {
+    const store = createConversationStore();
+    const listener = vi.fn();
+    const unsubscribe = store.subscribe(listener);
+    await store.refresh();
+    listener.mockClear();
+    window.dispatchEvent(new StorageEvent('storage', { key }));
+    await vi.waitFor(() => expect(listener).toHaveBeenCalled());
+    unsubscribe();
+  });
+
   it('serializes concurrent writes using current storage instead of either tab’s snapshot', async () => {
     const first = createConversationStore();
     const second = createConversationStore();
@@ -33,8 +106,8 @@ describe('conversation store', () => {
       second.update(({ conversations }) => append(conversations, roles, 'roles', 'max')),
     ]);
     await first.refresh();
-    expect(first.getSnapshot().conversations.low.direct).toEqual([direct]);
-    expect(first.getSnapshot().conversations.max.roles).toEqual([roles]);
+    expect(first.getSnapshot().conversations['reasoning:low:direct']).toEqual([direct]);
+    expect(first.getSnapshot().conversations['reasoning:max:roles']).toEqual([roles]);
     expect(loadConversations().conversations).toEqual(first.getSnapshot().conversations);
     expect(first.getSnapshot().generation).toBe(second.getSnapshot().generation);
   });
@@ -48,7 +121,7 @@ describe('conversation store', () => {
     const item = turn('Из другой вкладки');
     await first.update(({ conversations }) => append(conversations, item));
     window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY }));
-    await vi.waitFor(() => expect(second.getSnapshot().conversations.low.direct).toEqual([item]));
+    await vi.waitFor(() => expect(second.getSnapshot().conversations['reasoning:low:direct']).toEqual([item]));
     await first.clear();
     window.dispatchEvent(new Event('focus'));
     await vi.waitFor(() => expect(second.getSnapshot().conversations).toEqual(emptyProfiles()));
@@ -87,7 +160,7 @@ describe('conversation store', () => {
       expect(conversations).toEqual(emptyProfiles());
       return append(conversations, item);
     });
-    expect(loadConversations().conversations.low.direct).toEqual([item]);
+    expect(loadConversations().conversations['reasoning:low:direct']).toEqual([item]);
   });
 
   it('preserves a request owned by another tab and blocks a second request in that conversation', async () => {
@@ -101,15 +174,15 @@ describe('conversation store', () => {
       started.resolve();
       await finish.promise;
       await first.update(({ conversations }) => ({
-        ...conversations, low: { ...conversations.low, direct: [item] },
+        ...conversations, 'reasoning:low:direct': [item],
       }), snapshot.generation!);
     });
     await started.promise;
     try {
       await second.refresh();
-      expect(second.getSnapshot().conversations.low.direct[0]).toMatchObject({ response: null, error: null });
+      expect(second.getSnapshot().conversations['reasoning:low:direct'][0]).toMatchObject({ response: null, error: null });
       const result = await second.update(({ conversations }) => (
-        conversations.low.direct.some(isPendingTurn) ? null : append(conversations, turn('Дубликат'))
+        conversations['reasoning:low:direct'].some(isPendingTurn) ? null : append(conversations, turn('Дубликат'))
       ));
       expect(result.applied).toBe(false);
       await second.update(({ conversations }) => append(conversations, turn('Другая задача', 'steps'), 'steps'));
@@ -118,8 +191,8 @@ describe('conversation store', () => {
       await request;
     }
     await second.refresh();
-    expect(second.getSnapshot().conversations.low.direct).toEqual([item]);
-    expect(second.getSnapshot().conversations.low.steps[0].question).toBe('Другая задача');
+    expect(second.getSnapshot().conversations['reasoning:low:direct']).toEqual([item]);
+    expect(second.getSnapshot().conversations['reasoning:low:steps'][0].question).toBe('Другая задача');
   });
 
   it('recovers pending turns only after their request lock has been released', async () => {
@@ -128,7 +201,7 @@ describe('conversation store', () => {
     await first.trackRequest(item.id, () => first.update(({ conversations }) => append(conversations, { ...item, response: null })));
     const reloaded = createConversationStore();
     await reloaded.refresh();
-    expect(reloaded.getSnapshot().conversations.low.direct[0].error).toContain('Запрос прерван');
+    expect(reloaded.getSnapshot().conversations['reasoning:low:direct'][0].error).toContain('Запрос прерван');
   });
 
   it('keeps the generation across reloads and rotates it only when history is cleared', async () => {
@@ -172,7 +245,7 @@ describe('conversation store', () => {
       await store.update(({ conversations }) => append(conversations, turn('Первый')));
       await store.update(({ conversations }) => append(conversations, turn('Второй')));
       await store.refresh();
-      expect(store.getSnapshot().conversations.low.direct).toHaveLength(2);
+      expect(store.getSnapshot().conversations['reasoning:low:direct']).toHaveLength(2);
       expect(store.getSnapshot().warning).toContain('Не удалось сохранить историю');
       expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
     } finally {
@@ -189,7 +262,7 @@ describe('conversation store', () => {
     const item = turn('Только эта страница');
     await store.update(({ conversations }) => append(conversations, item));
     await store.refresh();
-    expect(store.getSnapshot().conversations.low.direct).toEqual([item]);
+    expect(store.getSnapshot().conversations['reasoning:low:direct']).toEqual([item]);
     expect(store.getSnapshot().warning).toContain('не поддерживает синхронизацию');
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
     await store.clear();

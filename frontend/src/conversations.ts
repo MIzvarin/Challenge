@@ -1,10 +1,14 @@
 import { isAnswer, isRecord } from './api';
 import type { Answer, History, Message, Stage } from './api';
+import { CONVERSATION_SCOPES, conversationKey, conversationRecord } from './conversation-scope';
+import type { ConversationKey, ConversationScope } from './conversation-scope';
 import { EFFORTS, MODES, STAGE_LABELS, STRATEGIES } from './modes';
 import type { Effort, Mode } from './modes';
 
 export const LEGACY_STORAGE_KEY = 'challenge.conversations.v1';
-export const STORAGE_KEY = 'challenge.conversations.v2';
+export const PREVIOUS_STORAGE_KEY = 'challenge.conversations.v2';
+export const STORAGE_KEY = 'challenge.conversations.v3';
+export const HISTORY_STORAGE_KEYS = [STORAGE_KEY, PREVIOUS_STORAGE_KEY, LEGACY_STORAGE_KEY];
 
 export interface Turn {
   id: string;
@@ -14,63 +18,80 @@ export interface Turn {
   error: string | null;
 }
 
-export type Conversations = Record<Mode, Turn[]>;
-export type Profiles = Record<Effort, Conversations>;
-
-export function emptyConversations(): Conversations {
-  return { direct: [], steps: [], prompt: [], roles: [], compare: [] };
-}
+export type Profiles = Record<ConversationKey, Turn[]>;
 
 export function emptyProfiles(): Profiles {
-  return { low: emptyConversations(), max: emptyConversations() };
+  return conversationRecord(() => []);
 }
 
 export function isPendingTurn(turn: Turn): boolean {
   return !turn.response && !turn.error;
 }
 
-function isTurn(turn: unknown, mode: Mode, effort: Effort): turn is Turn {
+function isTurn(turn: unknown, scope: ConversationScope): turn is Turn {
   if (!isRecord(turn)) return false;
   if (typeof turn.id !== 'string' || !turn.id) return false;
   if (typeof turn.question !== 'string' || !turn.question.trim()) return false;
   if (typeof turn.date !== 'string' || !Number.isFinite(Date.parse(turn.date))) return false;
   if (turn.error !== null && (typeof turn.error !== 'string' || !turn.error.trim())) return false;
   if (turn.response === null) return true;
-  if (turn.error !== null || !isAnswer(turn.response, turn.question, mode)) return false;
-  return turn.response.effort === effort || (effort === 'low' && turn.response.effort === undefined);
+  if (turn.error !== null || !isAnswer(turn.response, turn.question, scope.mode)) return false;
+  if (scope.workspace === 'temperature') return turn.response.temperature === scope.temperature;
+  return turn.response.temperature === undefined && (
+    turn.response.effort === scope.effort || (scope.effort === 'low' && turn.response.effort === undefined)
+  );
 }
 
-function restoreConversations(data: unknown, effort: Effort, activeRequests: ReadonlySet<string>): Conversations {
+function restoreTurns(data: unknown, scope: ConversationScope, activeRequests: ReadonlySet<string>): Turn[] {
+  if (!Array.isArray(data) || !data.every((turn): turn is Turn => isTurn(turn, scope))) throw new Error();
+  if (new Set(data.map((turn) => turn.id)).size !== data.length) throw new Error();
+  return data.map((turn) => {
+    if (!isPendingTurn(turn) || activeRequests.has(turn.id)) return turn;
+    return { ...turn, error: 'Запрос прерван перезагрузкой страницы. Отправьте вопрос ещё раз.' };
+  });
+}
+
+function restoreLegacy(data: unknown, effort: Effort, activeRequests: ReadonlySet<string>): Partial<Profiles> {
   if (!isRecord(data) || Object.keys(data).length !== MODES.length) throw new Error();
-  const conversations = emptyConversations();
+  const conversations: Partial<Profiles> = {};
   for (const mode of MODES) {
-    const turns = data[mode];
-    if (!Array.isArray(turns) || !turns.every((turn): turn is Turn => isTurn(turn, mode, effort))) throw new Error();
-    if (new Set(turns.map((turn) => turn.id)).size !== turns.length) throw new Error();
-    conversations[mode] = turns.map((turn) => {
-      if (!isPendingTurn(turn) || activeRequests.has(turn.id)) return turn;
-      return { ...turn, error: 'Запрос прерван перезагрузкой страницы. Отправьте вопрос ещё раз.' };
-    });
+    const scope = { workspace: 'reasoning', effort, mode } as const;
+    conversations[conversationKey(scope)] = restoreTurns(data[mode], scope, activeRequests);
   }
+  return conversations;
+}
+
+function readConversations(activeRequests: ReadonlySet<string>): Profiles {
+  const conversations = emptyProfiles();
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw !== null) {
+    const data: unknown = JSON.parse(raw);
+    if (!isRecord(data) || Object.keys(data).length !== CONVERSATION_SCOPES.length) throw new Error();
+    for (const scope of CONVERSATION_SCOPES) {
+      const key = conversationKey(scope);
+      conversations[key] = restoreTurns(data[key], scope, activeRequests);
+    }
+    return conversations;
+  }
+
+  const previous = localStorage.getItem(PREVIOUS_STORAGE_KEY);
+  if (previous !== null) {
+    const data: unknown = JSON.parse(previous);
+    if (!isRecord(data) || Object.keys(data).length !== EFFORTS.length) throw new Error();
+    for (const effort of EFFORTS) {
+      Object.assign(conversations, restoreLegacy(data[effort], effort, activeRequests));
+    }
+    return conversations;
+  }
+
+  const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+  if (legacy !== null) Object.assign(conversations, restoreLegacy(JSON.parse(legacy), 'low', activeRequests));
   return conversations;
 }
 
 export function loadConversations(activeRequests: ReadonlySet<string> = new Set()): { conversations: Profiles; warning: string | null } {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
-      const conversations = emptyProfiles();
-      if (legacy) conversations.low = restoreConversations(JSON.parse(legacy), 'low', activeRequests);
-      return { conversations, warning: null };
-    }
-    const data: unknown = JSON.parse(raw);
-    if (!isRecord(data) || Object.keys(data).length !== EFFORTS.length) throw new Error();
-    const conversations = {
-      low: restoreConversations(data.low, 'low', activeRequests),
-      max: restoreConversations(data.max, 'max', activeRequests),
-    };
-    return { conversations, warning: null };
+    return { conversations: readConversations(activeRequests), warning: null };
   } catch {
     return {
       conversations: emptyProfiles(),
@@ -81,14 +102,14 @@ export function loadConversations(activeRequests: ReadonlySet<string> = new Set(
 
 export function saveConversations(conversations: Profiles): string | null {
   try {
-    const hasHistory = EFFORTS.some((effort) => MODES.some((mode) => conversations[effort][mode].length > 0));
+    const hasHistory = Object.values(conversations).some((turns) => turns.length > 0);
     if (hasHistory) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
     } else {
       localStorage.removeItem(STORAGE_KEY);
     }
     // Remove the old copy only after the new history has been saved successfully.
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    for (const key of [PREVIOUS_STORAGE_KEY, LEGACY_STORAGE_KEY]) localStorage.removeItem(key);
     return null;
   } catch {
     return 'Не удалось сохранить историю в браузере. Она доступна только до закрытия или обновления страницы.';

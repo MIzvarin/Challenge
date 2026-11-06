@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import ROOT_DIR, Settings, load_settings
 from .opencode_go import API_BASE_URL
-from .schemas import Answer, Question
+from .schemas import AskAnswer, AskQuestion
 from .solver import solve
 
 
@@ -75,8 +75,8 @@ def create_app(
     async def health():
         return {"status": "ok"}
 
-    @app.post("/api/ask", response_model=Answer)
-    async def ask(payload: Question):
+    @app.post("/api/ask", response_model=AskAnswer)
+    async def ask(payload: AskQuestion):
         if not settings.api_key:
             raise HTTPException(503, "Добавьте OPENCODE_GO_API_KEY из OpenCode Console в корневой .env и перезапустите сервер.")
         limiter.check()
