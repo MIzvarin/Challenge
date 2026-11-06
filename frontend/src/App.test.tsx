@@ -248,7 +248,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Промпт → решение' }));
     submit(answer.question);
     expect(await screen.findByText('<script>alert(1)</script>')).toBeInTheDocument();
-    expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
+    expect(screen.getByText('<img src=x onerror=alert(1)>', { selector: 'p' })).toBeInTheDocument();
     expect(screen.getByText('<iframe src=x></iframe>')).toBeInTheDocument();
     expect(container.querySelector('script, img, iframe')).toBeNull();
   });

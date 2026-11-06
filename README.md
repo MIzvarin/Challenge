@@ -80,7 +80,14 @@ UUID поколения хранится отдельно в `challenge.conversa
 В репозитории настроен [OpenSpec](https://openspec.dev/docs) с профилем `core`
 и интеграцией для OpenCode. Контекст и правила — в `openspec/config.yaml`,
 спецификации — в `openspec/specs/`, активные изменения — в `openspec/changes/`.
-Существующее поведение пока описано в этом README; начальные спецификации ещё не перенесены.
+Текущее поведение проекта (as-is) зафиксировано в основных спецификациях:
+
+- [Подходы к решению и сравнение](openspec/specs/solving-strategies/spec.md).
+- [API вопросов и проверка состояния](openspec/specs/question-api/spec.md).
+- [Интеграция с моделью](openspec/specs/model-integration/spec.md).
+- [История диалогов](openspec/specs/conversation-history/spec.md).
+- [Веб-интерфейс](openspec/specs/web-interface/spec.md).
+- [Запуск и размещение](openspec/specs/deployment/spec.md).
 
 CLI можно установить без Node.js официальным установщиком (macOS/Linux):
 
