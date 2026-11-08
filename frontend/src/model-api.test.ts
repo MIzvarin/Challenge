@@ -2,15 +2,29 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { askQuestion, isAnswer } from './api';
 import type { ModelAnswer } from './api';
 import { CHAT_MODELS } from './modes';
+import { makeCost } from './test-fixtures';
 
 export function modelAnswer(model: ModelAnswer['model'] = 'kimi-k2.7-code', question = 'Привет'): ModelAnswer {
   return {
-    question, date: '2026-11-08T12:00:00Z', mode: 'direct', effort: null, model, tokens: 0,
-    results: [{ mode: 'direct', answer: 'Ответ', tokens: 0, duration_ms: 10, stages: [], error: null }],
+    question, date: '2026-11-08T12:00:00Z', mode: 'direct', effort: null, model, tokens: 0, cost: null,
+    results: [{ mode: 'direct', answer: 'Ответ', tokens: 0, cost: null, duration_ms: 10, stages: [], error: null }],
   };
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+it.each(CHAT_MODELS)('accepts price and zero price but rejects missing/mismatched model cost: %s', (model) => {
+  const response = modelAnswer(model);
+  for (const amount of ['0', '0.001446']) {
+    response.cost = makeCost(amount);
+    response.results[0].cost = makeCost(amount);
+    expect(isAnswer(response, 'Привет', 'direct')).toBe(true);
+  }
+  response.results[0].cost = makeCost('0.01');
+  expect(isAnswer(response, 'Привет', 'direct')).toBe(false);
+  delete response.results[0].cost;
+  expect(isAnswer(response, 'Привет', 'direct')).toBe(false);
+});
 
 it.each(CHAT_MODELS)('sends only selected model %s and direct history', async (model) => {
   const response = modelAnswer(model);

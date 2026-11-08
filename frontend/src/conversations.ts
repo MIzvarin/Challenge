@@ -38,7 +38,7 @@ function isTurn(turn: unknown, scope: ConversationScope): turn is Turn {
   if (typeof turn.date !== 'string' || !Number.isFinite(Date.parse(turn.date))) return false;
   if (turn.error !== null && (typeof turn.error !== 'string' || !turn.error.trim())) return false;
   if (turn.response === null) return true;
-  if (turn.error !== null || !isAnswer(turn.response, turn.question, scope.mode)) return false;
+  if (turn.error !== null || !isAnswer(turn.response, turn.question, scope.mode, undefined, true)) return false;
   if (scope.workspace === 'models') return turn.response.model === scope.model;
   if (turn.response.model !== undefined) return false;
   if (scope.workspace === 'temperature') return turn.response.temperature === scope.temperature;

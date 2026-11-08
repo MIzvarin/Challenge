@@ -5,10 +5,10 @@ import type { Turn } from './conversations';
 import { CHAT_MODELS } from './modes';
 import type { ChatModel } from './modes';
 import { conversationKey } from './conversation-scope';
-import { makeAnswer, makeModelAnswer } from './test-fixtures';
+import { makeAnswer, makeModelAnswer, makeTemperatureAnswer, withCosts } from './test-fixtures';
 
 function turn(model: ChatModel): Turn {
-  const response = makeModelAnswer(model, model);
+  const response = withCosts(makeModelAnswer(model, model));
   return { id: crypto.randomUUID(), question: model, date: response.date, response, error: null };
 }
 
@@ -16,6 +16,49 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem(REVISION_KEY, HISTORY_REVISION);
 });
+
+it('restores mixed legacy and priced histories in both keys without reset or repricing', async () => {
+  const profiles = emptyProfiles();
+  const old = makeAnswer('Старый');
+  delete old.cost;
+  delete old.results[0].cost;
+  const responses = [old, withCosts(makeAnswer('Новый')), withCosts(makeTemperatureAnswer('Температура')),
+    withCosts(makeModelAnswer('Модель'))];
+  for (const [index, response] of responses.entries()) {
+    const key = index < 2 ? 'reasoning:low:direct' : index === 2 ? 'temperature:0.7:direct' : 'models:kimi-k2.7-code:direct';
+    profiles[key].push({ id: `${index}`, question: response.question, date: response.date, response, error: null });
+  }
+  const legacyModel = makeModelAnswer('Старый модельный');
+  delete legacyModel.cost;
+  delete legacyModel.results[0].cost;
+  profiles['models:kimi-k2.7-code:direct'].push({ id: 'legacy', question: legacyModel.question, date: legacyModel.date, response: legacyModel, error: null });
+  saveConversations(profiles);
+  const generation = crypto.randomUUID();
+  localStorage.setItem(GENERATION_KEY, generation);
+  const before = [localStorage.getItem(STORAGE_KEY), localStorage.getItem(MODEL_STORAGE_KEY)];
+  const store = createConversationStore();
+  await store.refresh();
+  expect(store.getSnapshot().conversations).toEqual(profiles);
+  expect(localStorage.getItem(GENERATION_KEY)).toBe(generation);
+  expect(localStorage.getItem(REVISION_KEY)).toBe(HISTORY_REVISION);
+  expect([localStorage.getItem(STORAGE_KEY), localStorage.getItem(MODEL_STORAGE_KEY)]).toEqual(before);
+  // Reading an old version does not require a server-side pricing catalog.
+  expect(loadConversations().conversations).toEqual(profiles);
+});
+
+it.each(['reasoning:low:direct', 'models:kimi-k2.7-code:direct'] as const)(
+  'does not treat malformed present cost as legacy or overwrite %s', (key) => {
+    const profiles = emptyProfiles();
+    const response = withCosts(key.startsWith('models') ? makeModelAnswer() : makeAnswer());
+    response.cost!.amount = '-1';
+    profiles[key] = [{ id: 'bad', question: response.question, date: response.date, response, error: null }];
+    saveConversations(profiles);
+    const storageKey = key.startsWith('models') ? MODEL_STORAGE_KEY : STORAGE_KEY;
+    const raw = localStorage.getItem(storageKey);
+    expect(loadConversations().warning).not.toBeNull();
+    expect(localStorage.getItem(storageKey)).toBe(raw);
+  },
+);
 
 it('stores 13 original scopes and three model histories separately and restores all sixteen', () => {
   const profiles = emptyProfiles();

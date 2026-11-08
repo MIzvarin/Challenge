@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createConversationStore, GENERATION_KEY, HISTORY_REVISION, REVISION_KEY } from './conversation-store';
-import { emptyProfiles, HISTORY_STORAGE_KEYS, isPendingTurn, loadConversations, saveConversations, STORAGE_KEY } from './conversations';
+import { buildHistory, emptyProfiles, HISTORY_STORAGE_KEYS, isPendingTurn, loadConversations, saveConversations, STORAGE_KEY } from './conversations';
 import type { Profiles, Turn } from './conversations';
 import type { Effort, Mode } from './modes';
-import { makeAnswer, makeTemperatureAnswer } from './test-fixtures';
+import { makeAnswer, makeModelAnswer, makeTemperatureAnswer, withCosts } from './test-fixtures';
 import { conversationKey } from './conversation-scope';
 
 function turn(question: string, mode: Mode = 'direct', effort: Effort = 'low'): Turn {
@@ -31,7 +31,7 @@ describe('conversation store', () => {
   it('clears every version and rejects old temperature replies without erasing a new conversation', async () => {
     const first = createConversationStore();
     const second = createConversationStore();
-    const response = makeTemperatureAnswer('Удалить', 0);
+    const response = withCosts(makeTemperatureAnswer('Удалить', 0));
     const item: Turn = { id: crypto.randomUUID(), question: response.question, date: response.date, response, error: null };
     await first.update(({ conversations }) => ({ ...conversations, 'temperature:0:direct': [item] }));
     const oldGeneration = first.getSnapshot().generation!;
@@ -59,6 +59,30 @@ describe('conversation store', () => {
     await first.refresh();
     expect(first.getSnapshot().conversations['temperature:0:direct']).toEqual([item]);
     expect(first.getSnapshot().conversations['reasoning:low:direct']).toHaveLength(1);
+  });
+
+  it('merges priced model and original groups and never sends prices as context', async () => {
+    const first = createConversationStore();
+    const second = createConversationStore();
+    const original = turn('Роли', 'roles');
+    original.response = withCosts(original.response!);
+    const response = withCosts(makeModelAnswer('Модель'));
+    const model: Turn = { id: crypto.randomUUID(), question: response.question, date: response.date, response, error: null };
+    await Promise.all([
+      first.update(({ conversations }) => ({ ...conversations, 'reasoning:low:roles': [original] })),
+      second.update(({ conversations }) => ({ ...conversations, 'models:kimi-k2.7-code:direct': [model] })),
+    ]);
+    await first.refresh();
+    const restored = first.getSnapshot().conversations;
+    expect(restored['reasoning:low:roles']).toEqual([original]);
+    expect(restored['models:kimi-k2.7-code:direct']).toEqual([model]);
+    const context = JSON.stringify(buildHistory('roles', restored['reasoning:low:roles']));
+    expect(context).toContain('Разбор задачи');
+    for (const value of ['pricing_version', 'amount', 'opencode.ai', '0.001']) expect(context).not.toContain(value);
+    const generation = first.getSnapshot().generation!;
+    await second.clear();
+    expect((await first.update(() => restored, generation)).applied).toBe(false);
+    expect(first.getSnapshot().conversations).toEqual(emptyProfiles());
   });
 
   it('keeps live temperature turns pending and refuses a duplicate while allowing other scopes', async () => {

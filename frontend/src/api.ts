@@ -1,6 +1,9 @@
 import { CHAT_MODELS, EFFORTS, STRATEGIES, TEMPERATURES } from './modes';
 import type { ChatModel, Effort, Mode, Strategy, Temperature } from './modes';
 import type { ConversationScope } from './conversation-scope';
+import { compareSum, isCost, samePricing } from './cost';
+import type { Cost } from './cost';
+export type { Cost } from './cost';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -13,12 +16,15 @@ export interface Stage {
   name: 'prompt' | 'analyst' | 'implementer';
   content: string;
   tokens: number;
+  // Absent only in history saved before cost metadata existed.
+  cost?: Cost | null;
 }
 
 export interface Result {
   mode: Strategy;
   answer: string | null;
   tokens: number | null;
+  cost?: Cost | null;
   duration_ms: number;
   stages: Stage[];
   error: string | null;
@@ -29,6 +35,7 @@ interface BaseAnswer {
   date: string;
   mode: Mode;
   tokens: number | null;
+  cost?: Cost | null;
   results: Result[];
 }
 
@@ -75,27 +82,36 @@ function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isStage(data: unknown, name: Stage['name']): data is Stage {
-  return isRecord(data) && Object.keys(data).length === 3 && data.name === name &&
-    isText(data.content) && isCount(data.tokens);
+function hasCost(data: Record<string, unknown>, legacy: boolean): boolean {
+  return 'cost' in data ? data.cost === null || isCost(data.cost) : legacy;
 }
 
-function isResult(data: unknown, mode: Strategy): data is Result {
-  if (!isRecord(data) || Object.keys(data).length !== 6 || data.mode !== mode) return false;
+function isStage(data: unknown, name: Stage['name'], legacy: boolean): data is Stage {
+  return isRecord(data) && Object.keys(data).length === (('cost' in data) ? 4 : 3) &&
+    hasCost(data, legacy) && data.name === name && isText(data.content) && isCount(data.tokens);
+}
+
+function isResult(data: unknown, mode: Strategy, legacy: boolean): data is Result {
+  if (!isRecord(data) || Object.keys(data).length !== (('cost' in data) ? 7 : 6) ||
+      !hasCost(data, legacy) || data.mode !== mode) return false;
   if (!isCount(data.duration_ms) || !Array.isArray(data.stages)) return false;
 
   const stages = data.stages;
   const names = EXPECTED_STAGES[mode];
   if (stages.length > names.length || !stages.every(
-    (stage, index): stage is Stage => isStage(stage, names[index]),
+    (stage, index): stage is Stage => isStage(stage, names[index], legacy),
   )) return false;
 
-  if (data.error !== null) return isText(data.error) && data.answer === null && data.tokens === null;
+  const cost = data.cost as Cost | null | undefined;
+  const stageCosts = stages.flatMap((stage) => stage.cost ? [stage.cost] : []);
+  if (!samePricing([...(cost ? [cost] : []), ...stageCosts])) return false;
+  if (cost && (stages.some((stage) => !stage.cost) || compareSum(cost.amount, stageCosts.map((c) => c.amount)) < 0)) return false;
+  if (data.error !== null) return !cost && isText(data.error) && data.answer === null && data.tokens === null;
   return isText(data.answer) && isCount(data.tokens) && stages.length === names.length &&
     data.tokens >= stages.reduce((sum, stage) => sum + stage.tokens, 0);
 }
 
-export function isAnswer(data: unknown, question: string, mode: Mode, expected?: ConversationScope): data is Answer {
+export function isAnswer(data: unknown, question: string, mode: Mode, expected?: ConversationScope, legacy = false): data is Answer {
   if (!isRecord(data)) return false;
   const hasEffort = 'effort' in data;
   const hasTemperature = 'temperature' in data;
@@ -103,6 +119,8 @@ export function isAnswer(data: unknown, question: string, mode: Mode, expected?:
   let fieldCount = 5;
   if (hasEffort) fieldCount = 6;
   if (hasTemperature || hasModel) fieldCount = 7;
+  if ('cost' in data) fieldCount += 1;
+  if (!hasCost(data, legacy)) return false;
   if (Object.keys(data).length !== fieldCount) return false;
   if (hasModel) {
     if (hasTemperature || data.mode !== 'direct' || data.effort !== null || !CHAT_MODELS.includes(data.model as ChatModel)) return false;
@@ -119,9 +137,17 @@ export function isAnswer(data: unknown, question: string, mode: Mode, expected?:
   if (!Array.isArray(data.results)) return false;
   const results = data.results;
   if (results.length !== modes.length || !results.every(
-    (result, index): result is Result => isResult(result, modes[index]),
+    (result, index): result is Result => isResult(result, modes[index], legacy),
   )) return false;
   if (hasModel && results[0].error !== null) return false;
+
+  const cost = data.cost as Cost | null | undefined;
+  const resultCosts = results.flatMap((result) => result.cost ? [result.cost] : []);
+  const allCosts = [...(cost ? [cost] : []), ...resultCosts, ...results.flatMap((result) => result.stages.flatMap((stage) => stage.cost ? [stage.cost] : []))];
+  if (!samePricing(allCosts)) return false;
+  if (cost) {
+    if (resultCosts.length !== results.length || compareSum(cost.amount, resultCosts.map((c) => c.amount)) !== 0) return false;
+  } else if (resultCosts.length === results.length) return false;
 
   let total = 0;
   for (const result of results) {

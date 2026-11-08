@@ -1,5 +1,6 @@
 from typing import Annotated, ClassVar, Literal, Self
 from uuid import UUID, uuid4
+from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
@@ -74,11 +75,35 @@ class TemperatureQuestion(BaseQuestion):
 AskQuestion = Question | TemperatureQuestion
 
 
+class Cost(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    amount: str = Field(pattern=r"^(0|[1-9][0-9]*)(\.[0-9]+)?$")
+    currency: Literal["USD"]
+    pricing_version: str = Field(min_length=1)
+    source: str
+
+    @field_validator("pricing_version")
+    @classmethod
+    def reject_blank_version(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Pricing version must not be blank")
+        return value
+
+    @field_validator("source")
+    @classmethod
+    def require_https(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.hostname or any(c.isspace() for c in value):
+            raise ValueError("Source must be an HTTPS URL")
+        return value
+
+
 class Stage(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     name: StageName
     content: str = Field(min_length=1)
     tokens: int = Field(ge=0)
+    cost: Cost | None
 
 
 class Result(BaseModel):
@@ -86,6 +111,7 @@ class Result(BaseModel):
     mode: Strategy
     answer: str | None
     tokens: int | None = Field(ge=0)
+    cost: Cost | None
     duration_ms: int = Field(ge=0)
     stages: list[Stage]
     error: str | None
@@ -98,6 +124,7 @@ class Answer(BaseModel):
     mode: Mode
     effort: Effort
     tokens: int | None = Field(ge=0)
+    cost: Cost | None
     results: list[Result]
 
 

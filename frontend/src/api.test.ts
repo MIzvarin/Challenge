@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
-import { askQuestion } from './api';
-import { makeAnswer, makeResult, makeTemperatureAnswer } from './test-fixtures';
+import { askQuestion, isAnswer } from './api';
+import { makeAnswer, makeCost, makeResult, makeTemperatureAnswer, withCosts } from './test-fixtures';
 import type { Effort, Mode, Temperature } from './modes';
 
 const reasoning = (mode: Mode = 'direct', effort: Effort = 'low') => ({ workspace: 'reasoning' as const, mode, effort });
@@ -22,6 +22,49 @@ function ask() {
 }
 
 describe('askQuestion', () => {
+  it.each(['direct', 'prompt', 'roles', 'compare'] as const)('validates exact prices for %s', (mode) => {
+    const response = withCosts(makeAnswer('Привет', mode));
+    expect(isAnswer(response, 'Привет', mode)).toBe(true);
+    response.cost!.amount = '0.009';
+    expect(isAnswer(response, 'Привет', mode)).toBe(false);
+  });
+
+  it.each([
+    { amount: '-1' }, { amount: 'NaN' }, { amount: '1e-6' }, { amount: 1 },
+    { amount: '0\n' }, { currency: 'EUR' }, { pricing_version: ' ' },
+    { source: 'http://example.com' }, { source: 'javascript:alert(1)' }, { extra: true },
+  ])('rejects malformed cost at every level: %j', (changes) => {
+    for (const level of ['answer', 'result', 'stage']) {
+      const response = withCosts(makeAnswer('Привет', 'prompt'));
+      const target = level === 'answer' ? response : level === 'result' ? response.results[0] : response.results[0].stages[0];
+      Object.assign(target, { cost: { ...makeCost(), ...changes } });
+      expect(isAnswer(response, 'Привет', 'prompt')).toBe(false);
+    }
+  });
+
+  it('requires cost fields in new network responses and matching pricing metadata', () => {
+    for (const level of ['answer', 'result', 'stage']) {
+      const response = withCosts(makeAnswer('Привет', 'prompt'));
+      const target = level === 'answer' ? response : level === 'result' ? response.results[0] : response.results[0].stages[0];
+      delete target.cost;
+      expect(isAnswer(response, 'Привет', 'prompt')).toBe(false);
+    }
+    const response = withCosts(makeAnswer('Привет', 'compare'));
+    response.results[0].cost!.pricing_version = 'other';
+    expect(isAnswer(response, 'Привет', 'compare')).toBe(false);
+    response.results[0].cost = null;
+    expect(isAnswer(response, 'Привет', 'compare')).toBe(false);
+    response.cost = null;
+    expect(isAnswer(response, 'Привет', 'compare')).toBe(true);
+  });
+
+  it('checks all failed comparison results, not only those before unknown tokens', () => {
+    const response = makeAnswer('Привет', 'compare');
+    response.results[0] = { ...response.results[0], answer: null, error: 'Ошибка', tokens: null };
+    response.tokens = null;
+    response.results[3].stages[0].cost = makeCost('-1');
+    expect(isAnswer(response, 'Привет', 'compare')).toBe(false);
+  });
   it.each([0, 0.7, 1.2] as const)('sends temperature %s without effort', async (temperature) => {
     const response = makeTemperatureAnswer('Привет', temperature);
     const fetchMock = mockJsonResponse(response);

@@ -1,5 +1,7 @@
 import json
 from collections import Counter
+from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import uuid4, uuid5
 
 import httpx
@@ -7,6 +9,58 @@ import pytest
 
 from app.solver import LANGUAGE_INSTRUCTION
 from test_api import completion, make_client
+
+
+def priced_completion():
+    body = completion("Ответ", tokens=1200)
+    body["usage"].update(prompt_tokens=1000, completion_tokens=200,
+                         prompt_tokens_details={"cached_tokens": 400})
+    return body
+
+
+@pytest.mark.parametrize("mode,count", [("direct", 1), ("steps", 1), ("prompt", 2), ("roles", 3), ("compare", 7)])
+def test_price_sums_actual_calls_once(mode, count, monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 8, 12, tzinfo=UTC)
+    monkeypatch.setattr("app.solver.datetime", Clock)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json=priced_completion())
+
+    with make_client(handler) as client:
+        response = client.post("/api/ask", json={"question": "Задача", "mode": mode})
+    assert response.status_code == 200
+    body = response.json()
+    single = Decimal("0.0002112")
+    assert Decimal(body["cost"]["amount"]) == count * single
+    for result in body["results"]:
+        assert Decimal(result["cost"]["amount"]) == (len(result["stages"]) + 1) * single
+        assert all(Decimal(stage["cost"]["amount"]) == single for stage in result["stages"])
+    assert len(calls) == count
+
+
+@pytest.mark.parametrize("failure", ["http", "unknown"])
+def test_comparison_unknown_cost_preserves_known_stages(failure):
+    def handler(request):
+        messages = json.loads(request.content)["messages"]
+        body = priced_completion()
+        if "Ты исполнитель" in messages[0]["content"]:
+            if failure == "http":
+                return httpx.Response(500, json={"error": "secret"})
+            body["usage"] = {"total_tokens": 1200}
+        return httpx.Response(200, json=body)
+
+    with make_client(handler) as client:
+        body = client.post("/api/ask", json={"question": "Задача", "mode": "compare"}).json()
+    assert body["cost"] is None
+    assert all(result["cost"] is not None for result in body["results"][:3])
+    roles = body["results"][3]
+    assert roles["cost"] is None
+    assert roles["stages"][0]["cost"] is not None
 
 
 def test_temperature_sessions_are_stable_isolated_and_keep_old_identifiers():
@@ -84,7 +138,7 @@ def test_prompt_is_generated_then_sent_verbatim_to_the_same_model():
     assert len(calls) == 2
     assert len(set(sessions)) == 1
     assert answer["tokens"] == 100
-    assert answer["results"][0]["stages"] == [{"name": "prompt", "content": prompt, "tokens": 30}]
+    assert answer["results"][0]["stages"] == [{"name": "prompt", "content": prompt, "tokens": 30, "cost": None}]
     assert answer["results"][0]["answer"] == "Решение"
 
 

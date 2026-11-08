@@ -9,9 +9,10 @@ from fastapi import HTTPException
 from .config import Settings
 from .opencode_go import complete
 from .responses_go import complete_responses
+from .pricing import price, sum_costs
 from .model_registry import CHAT_MODELS
 from .schemas import (
-    STRATEGIES, Answer, AskAnswer, AskQuestion, Result, Stage, StageName, Strategy,
+    STRATEGIES, Answer, AskAnswer, AskQuestion, Cost, Result, Stage, StageName, Strategy,
     TemperatureAnswer, TemperatureQuestion, ModelAnswer, ModelQuestion,
 )
 
@@ -63,6 +64,7 @@ async def solve_strategy(
     messages.append({"role": "user", "content": payload.question})
     stages: list[Stage] = []
     tokens = 0
+    costs: list[Cost | None] = []
 
     async def generate(instruction: str | None = None) -> str:
         nonlocal tokens
@@ -72,16 +74,18 @@ async def solve_strategy(
         request_messages = [
             {"role": "system", "content": system}, *messages,
         ]
-        content, used = await complete(request_messages, settings, client, session_id, payload.generation_parameters)
-        tokens += used
-        return content
+        call_started = datetime.now(UTC)
+        generated = await complete(request_messages, settings, client, session_id, payload.generation_parameters)
+        tokens += generated.tokens
+        costs.append(price(settings.model, generated.usage, call_started))
+        return generated.content
 
     async def intermediate(
         name: StageName, instruction: str, follow_up: str | None = None,
     ) -> None:
         before = tokens
         content = await generate(instruction)
-        stages.append(Stage(name=name, content=content, tokens=tokens - before))
+        stages.append(Stage(name=name, content=content, tokens=tokens - before, cost=costs[-1]))
         messages.extend([
             {"role": "assistant", "content": content},
             {"role": "user", "content": content if follow_up is None else follow_up},
@@ -112,6 +116,7 @@ async def solve_strategy(
     return Result(
         mode=mode, answer=answer, tokens=result_tokens, stages=stages,
         duration_ms=round((monotonic() - started) * 1000), error=error_detail,
+        cost=None if error_detail is not None else sum_costs(costs),
     )
 
 
@@ -134,7 +139,7 @@ async def solve(payload: AskQuestion, settings: Settings, client: httpx.AsyncCli
         metadata = {"effort": payload.effort}
     return answer_type(
         question=payload.question, date=datetime.now(UTC), mode=payload.mode,
-        tokens=total_tokens, results=results, **metadata,
+        tokens=total_tokens, cost=sum_costs([result.cost for result in results]), results=results, **metadata,
     )
 
 
@@ -146,13 +151,16 @@ async def solve_model(payload: ModelQuestion, settings: Settings, client: httpx.
         *[message.model_dump() for message in payload.history.get("direct", [])],
         {"role": "user", "content": payload.question},
     ]
+    call_started = datetime.now(UTC)
     if CHAT_MODELS[payload.model].protocol == "responses":
-        answer, tokens = await complete_responses(messages, settings, client, session_id, model=payload.model)
+        generated = await complete_responses(messages, settings, client, session_id, model=payload.model)
     else:
-        answer, tokens = await complete(messages, settings, client, session_id, {}, model=payload.model)
+        generated = await complete(messages, settings, client, session_id, {}, model=payload.model)
+    answer, tokens = generated.content, generated.tokens
+    cost = price(payload.model, generated.usage, call_started)
     return ModelAnswer(
         question=payload.question, date=datetime.now(UTC), model=payload.model,
-        mode="direct", effort=None, tokens=tokens,
+        mode="direct", effort=None, tokens=tokens, cost=cost,
         results=[Result(mode="direct", answer=answer, tokens=tokens,
-                        duration_ms=round((monotonic() - started) * 1000), stages=[], error=None)],
+                         duration_ms=round((monotonic() - started) * 1000), stages=[], error=None, cost=cost)],
     )

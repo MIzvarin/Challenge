@@ -127,7 +127,7 @@ def test_question_is_sent_with_server_key():
     assert len(result["results"]) == 1
     answer = result["results"][0]
     assert answer == {
-        "mode": "direct", "answer": "Привет!", "tokens": 142,
+        "mode": "direct", "answer": "Привет!", "tokens": 142, "cost": None,
         "duration_ms": answer["duration_ms"], "stages": [], "error": None,
     }
     assert answer["duration_ms"] >= 0
@@ -286,7 +286,7 @@ def test_api_response_schema_forbids_extra_fields_and_requires_metadata():
         document = client.get("/openapi.json").json()
         schema = document["components"]["schemas"]["Answer"]
     assert schema["additionalProperties"] is False
-    assert schema["required"] == ["question", "date", "mode", "effort", "tokens", "results"]
+    assert schema["required"] == ["question", "date", "mode", "effort", "tokens", "cost", "results"]
     assert schema["properties"]["date"]["format"] == "date-time"
     assert schema["properties"]["tokens"]["anyOf"][0] == {"type": "integer", "minimum": 0}
     temperature_schema = document["components"]["schemas"]["TemperatureAnswer"]
@@ -303,12 +303,12 @@ def test_response_preserves_envelope_and_reports_real_settings(settings):
         before = datetime.now(UTC)
         response = client.post("/api/ask", json={"question": "Привет", **settings})
     data = response.json()
-    keys = {"question", "date", "mode", "effort", "tokens", "results"}
+    keys = {"question", "date", "mode", "effort", "tokens", "cost", "results"}
     assert set(data) == (keys | {"temperature"} if "temperature" in settings else keys)
     assert data["effort"] == (None if "temperature" in settings else settings.get("effort", "low"))
     assert data["tokens"] == 0
     assert before <= datetime.fromisoformat(data["date"]) <= datetime.now(UTC)
-    assert set(data["results"][0]) == {"mode", "answer", "tokens", "duration_ms", "stages", "error"}
+    assert set(data["results"][0]) == {"mode", "answer", "tokens", "cost", "duration_ms", "stages", "error"}
     assert data["results"][0]["stages"] == []
     assert data["results"][0]["duration_ms"] >= 0
 

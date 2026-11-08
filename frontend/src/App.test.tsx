@@ -8,7 +8,7 @@ import { LEGACY_STORAGE_KEY, STORAGE_KEY } from './conversations';
 import { GENERATION_KEY, HISTORY_REVISION, REVISION_KEY } from './conversation-store';
 import { MODE_LABELS, MODES } from './modes';
 import type { Effort, Mode } from './modes';
-import { makeAnswer, makeScopedAnswer as answerFor } from './test-fixtures';
+import { makeAnswer, makeScopedAnswer as answerFor, withCosts } from './test-fixtures';
 import type { ConversationScope } from './conversation-scope';
 import { useConversationController } from './use-conversation-controller';
 
@@ -38,6 +38,35 @@ describe('App', () => {
     localStorage.setItem(REVISION_KEY, HISTORY_REVISION);
     mockAsk.mockReset();
     mockAsk.mockImplementation(async (question, scope) => answerFor(question, scope));
+  });
+
+  it.each(['low', 'max', 0, 0.7, 1.2] as const)('preserves price on navigation and remount for %s', async (setting) => {
+    mockAsk.mockImplementation(async (question, scope) => withCosts(answerFor(question, scope)));
+    const first = render(<App />);
+    const select = () => {
+      if (typeof setting === 'number') {
+        selectWorkspace('Температура');
+        fireEvent.click(screen.getByRole('tab', { name: setting === 0 ? 'Низкая' : setting === 0.7 ? 'Средняя' : 'Высокая' }));
+      } else if (setting === 'max') {
+        fireEvent.click(screen.getByRole('tab', { name: 'Максимум рассуждений' }));
+      }
+    };
+    select();
+    submit('С ценой');
+    await screen.findByText('Примерная стоимость: ≈ 0,001 USD');
+    expect(mockAsk).toHaveBeenCalledTimes(1);
+    fireEvent.change(screen.getByLabelText('Ваш вопрос'), { target: { value: 'Черновик' } });
+    const other = typeof setting === 'number' ? 'Подходы к решению' : 'Температура';
+    selectWorkspace(other);
+    expect(screen.queryByText('С ценой')).not.toBeInTheDocument();
+    selectWorkspace(typeof setting === 'number' ? 'Температура' : 'Подходы к решению');
+    expect(screen.getByLabelText('Ваш вопрос')).toHaveValue('Черновик');
+    expect(screen.getByText('Примерная стоимость: ≈ 0,001 USD')).toBeInTheDocument();
+    first.unmount();
+    render(<App />);
+    select();
+    await screen.findByText('Примерная стоимость: ≈ 0,001 USD');
+    expect(mockAsk).toHaveBeenCalledTimes(1);
   });
 
   it('uses one controller for independent temperature and reasoning drafts and background replies', async () => {

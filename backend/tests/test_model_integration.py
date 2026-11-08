@@ -9,6 +9,7 @@ from app.config import Settings
 from app.model_registry import CHAT_MODELS
 from app.opencode_go import API_BASE_URL, complete
 from app.responses_go import complete_responses
+from app.usage import GeneratedAnswer, TokenUsage
 
 
 def test_fixed_model_registry():
@@ -37,7 +38,7 @@ def test_explicit_model_does_not_mutate_settings(model):
 
     async def run():
         async with httpx.AsyncClient(base_url=API_BASE_URL, transport=httpx.MockTransport(handler)) as client:
-            assert await complete(messages, settings, client, "session", {}, model=model) == ("Ответ", 0)
+            assert await complete(messages, settings, client, "session", {}, model=model) == GeneratedAnswer("Ответ", 0, None)
             await complete(messages, settings, client, "session", {
                 "thinking": {"type": "enabled"}, "reasoning_effort": "low",
             })
@@ -58,6 +59,35 @@ def responses_response():
             {"type": "output_text", "text": " Ответ"}, {"type": "output_text", "text": "! "},
         ]},
     ], "usage": {"total_tokens": 0}}
+
+
+@pytest.mark.parametrize("protocol", ["chat-completions", "responses"])
+@pytest.mark.parametrize("details,expected", [
+    ({}, None),
+    ({"input": 1000, "output": 200, "cache_read": 400,
+      "cache_write_5m": 0, "cache_write_1h": 0}, TokenUsage(1400, 200, 400, 0)),
+    ({"input": -1, "output": 200, "cache_read": 400,
+      "cache_write_5m": 0, "cache_write_1h": 0}, None),
+])
+def test_optional_price_details_preserve_valid_response(protocol, details, expected):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        body = responses_response() if protocol == "responses" else {
+            "choices": [{"message": {"content": "Ответ!"}, "finish_reason": "stop"}],
+        }
+        body["usage"] = {"total_tokens": 1600, "opencode": {"tokens": details}}
+        return httpx.Response(200, json=body)
+
+    async def run():
+        async with httpx.AsyncClient(base_url=API_BASE_URL, transport=httpx.MockTransport(handler)) as client:
+            if protocol == "responses":
+                return await complete_responses([], Settings(api_key="secret"), client, "session", model="grok-4.7")
+            return await complete([], Settings(api_key="secret"), client, "session", {})
+
+    assert asyncio.run(run()) == GeneratedAnswer("Ответ!", 1600, expected)
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("model", ["grok-4.7", "gpt-6-luna"])
@@ -91,7 +121,7 @@ def test_responses_wire_format(model):
                 {"role": "user", "content": "Дальше"},
             ], Settings(api_key="test-secret"), client, "session", model=model)
 
-    assert asyncio.run(run()) == ("Ответ!", 0)
+    assert asyncio.run(run()) == GeneratedAnswer("Ответ!", 0, None)
     assert len(calls) == 1
 
 

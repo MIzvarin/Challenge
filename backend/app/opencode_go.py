@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from .config import Settings
+from .usage import GeneratedAnswer, normalize_usage
 
 API_BASE_URL = "https://opencode.ai/inference/go/openai/v1/"
 USER_AGENT = "challenge-qa/0.1"
@@ -106,7 +107,7 @@ async def complete(
     generation_parameters: dict[str, object],
     *,
     model: str | None = None,
-) -> tuple[str, int]:
+) -> GeneratedAnswer:
     try:
         response = await client.post(
             "chat/completions",
@@ -158,4 +159,4 @@ async def complete(
     if completion.usage is None:
         raise HTTPException(502, "OpenCode Go не вернул статистику расхода токенов. Попробуйте ещё раз.")
 
-    return answer, completion.usage.total_tokens
+    return GeneratedAnswer(answer, completion.usage.total_tokens, normalize_usage(body.get("usage"), "chat-completions"))

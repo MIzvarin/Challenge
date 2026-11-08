@@ -99,11 +99,11 @@ def test_one_selected_model_with_full_history_and_stable_session(model):
             })
             assert response.status_code == 200
             body = response.json()
-            assert set(body) == {"question", "date", "model", "mode", "effort", "tokens", "results"}
+            assert set(body) == {"question", "date", "model", "mode", "effort", "tokens", "cost", "results"}
             assert body["model"] == model and body["effort"] is None and body["tokens"] == 0
             assert len(body["results"]) == 1
             result = body["results"][0]
-            assert result == {"mode": "direct", "answer": "Ответ", "tokens": 0,
+            assert result == {"mode": "direct", "answer": "Ответ", "tokens": 0, "cost": None,
                               "duration_ms": result["duration_ms"], "stages": [], "error": None}
             assert result["duration_ms"] >= 0
     assert len(calls) == 2

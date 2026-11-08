@@ -5,7 +5,7 @@ import { App } from './App';
 import { askQuestion } from './api';
 import type { Answer } from './api';
 import { CHAT_MODELS, MODEL_LABELS } from './modes';
-import { makeAnswer, makeModelAnswer, makeScopedAnswer } from './test-fixtures';
+import { makeAnswer, makeModelAnswer, makeScopedAnswer, withCosts } from './test-fixtures';
 import { emptyProfiles, HISTORY_STORAGE_KEYS, saveConversations } from './conversations';
 import { createConversationStore, HISTORY_REVISION, REVISION_KEY } from './conversation-store';
 
@@ -57,11 +57,13 @@ it('shows three accessible model tabs, keeps initial workspace and never generat
 });
 
 it.each(CHAT_MODELS)('sends one direct question only to %s and restores its own history', async (model) => {
+  mockAsk.mockImplementation(async (question, scope) => withCosts(makeScopedAnswer(question, scope)));
   const first = render(<App />);
   workspace('Модели');
   fireEvent.click(screen.getByRole('tab', { name: MODEL_LABELS[model] }));
   submit(`Вопрос ${model}`);
   await screen.findByText('Ответ модели');
+  expect(screen.getByText('Примерная стоимость: ≈ 0,001 USD')).toBeInTheDocument();
   expect(mockAsk).toHaveBeenCalledExactlyOnceWith(`Вопрос ${model}`, {
     workspace: 'models', model, mode: 'direct',
   }, { direct: [] }, expect.any(AbortSignal), expect.any(String));
@@ -73,6 +75,8 @@ it.each(CHAT_MODELS)('sends one direct question only to %s and restores its own 
   workspace('Модели');
   fireEvent.click(screen.getByRole('tab', { name: MODEL_LABELS[model] }));
   await screen.findByText(`Вопрос ${model}`);
+  expect(screen.getByText('Примерная стоимость: ≈ 0,001 USD')).toBeInTheDocument();
+  expect(mockAsk).toHaveBeenCalledTimes(1);
   submit('Уточнение');
   await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(2));
   expect(mockAsk.mock.calls[1][2]).toEqual({ direct: [

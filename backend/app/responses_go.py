@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from .config import Settings
+from .usage import GeneratedAnswer, normalize_usage
 from .opencode_go import USER_AGENT, _error_status, _provider_error
 
 
@@ -10,7 +11,7 @@ class Usage(BaseModel):
     total_tokens: int = Field(strict=True, ge=0)
 
 
-def parse_response(body: object) -> tuple[str, int]:
+def parse_response(body: object) -> GeneratedAnswer:
     try:
         if not isinstance(body, dict) or body.get("status") != "completed":
             raise ValueError()
@@ -39,13 +40,13 @@ def parse_response(body: object) -> tuple[str, int]:
         usage = Usage.model_validate(body.get("usage"))
     except (ValueError, TypeError):
         raise HTTPException(502, "Модель не вернула завершённый ответ с достоверным расходом токенов. Попробуйте ещё раз.") from None
-    return answer, usage.total_tokens
+    return GeneratedAnswer(answer, usage.total_tokens, normalize_usage(body.get("usage"), "responses"))
 
 
 async def complete_responses(
     messages: list[dict[str, str]], settings: Settings,
     client: httpx.AsyncClient, session_id: str, *, model: str,
-) -> tuple[str, int]:
+) -> GeneratedAnswer:
     try:
         response = await client.post(
             "responses",

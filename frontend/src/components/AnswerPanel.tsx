@@ -3,6 +3,28 @@ import type { Answer, Result } from '../api';
 import { isPendingTurn } from '../conversations';
 import type { Turn } from '../conversations';
 import { MODEL_LABELS, MODE_LABELS, STAGE_LABELS } from '../modes';
+import { formatCost } from '../cost';
+import type { Cost } from '../cost';
+
+interface CostMetadataProps {
+  cost?: Cost | null;
+  total?: boolean;
+}
+
+function CostMetadata({ cost, total = false }: CostMetadataProps): ReactElement {
+  let label = total ? 'Общая стоимость недоступна' : 'Стоимость недоступна';
+  if (cost) {
+    const heading = total ? 'Примерная общая стоимость' : 'Примерная стоимость';
+    label = `${heading}: ${formatCost(cost.amount)}`;
+  }
+  return (
+    <div className="cost-metadata">
+      <p className="answer-metadata">
+        {label}
+      </p>
+    </div>
+  );
+}
 
 interface ResultPanelProps {
   result: Result;
@@ -29,6 +51,7 @@ function ResultPanel({ result, comparison }: ResultPanelProps): ReactElement {
       <p className="answer-metadata">
         {result.tokens === null ? 'Полный расход токенов неизвестен' : `Токенов потрачено: ${result.tokens.toLocaleString('ru-RU')}`}
       </p>
+      <CostMetadata cost={result.cost} />
       {result.answer && <div className="answer-text">{result.answer}</div>}
       {result.error && <p className="error-message" role="alert">{result.error}</p>}
       {result.stages.length > 0 && (
@@ -36,6 +59,7 @@ function ResultPanel({ result, comparison }: ResultPanelProps): ReactElement {
           {result.stages.map((stage) => (
             <details key={stage.name} className="stage">
               <summary>{STAGE_LABELS[stage.name]} <span>{stage.tokens.toLocaleString('ru-RU')} токенов</span></summary>
+              <CostMetadata cost={stage.cost} />
               <div className="stage-text">{stage.content}</div>
             </details>
           ))}
@@ -77,6 +101,7 @@ export function AnswerPanel({ turns }: AnswerPanelProps): ReactElement {
                     <span>Всего токенов: {response.tokens.toLocaleString('ru-RU')}</span>
                   )}
                 </div>
+                {comparison && <CostMetadata cost={response.cost} total />}
               </div>
               {response && (
                 <div className={comparison ? 'comparison-grid' : 'single-result'}>
