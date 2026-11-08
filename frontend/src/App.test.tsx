@@ -5,16 +5,14 @@ import { App } from './App';
 import { askQuestion } from './api';
 import type { Answer } from './api';
 import { LEGACY_STORAGE_KEY, STORAGE_KEY } from './conversations';
-import { GENERATION_KEY } from './conversation-store';
+import { GENERATION_KEY, HISTORY_REVISION, REVISION_KEY } from './conversation-store';
 import { MODE_LABELS, MODES } from './modes';
 import type { Effort, Mode } from './modes';
-import { makeAnswer, makeTemperatureAnswer } from './test-fixtures';
+import { makeAnswer, makeScopedAnswer as answerFor } from './test-fixtures';
 import type { ConversationScope } from './conversation-scope';
 import { useConversationController } from './use-conversation-controller';
 
 const reasoning = (mode: Mode = 'direct', effort: Effort = 'low') => ({ workspace: 'reasoning' as const, mode, effort });
-const answerFor = (question: string, scope: ConversationScope): Answer => scope.workspace === 'reasoning'
-  ? makeAnswer(question, scope.mode, scope.effort) : makeTemperatureAnswer(question, scope.temperature);
 
 vi.mock('./api', async (importOriginal) => ({
   ...await importOriginal<typeof import('./api')>(), askQuestion: vi.fn(),
@@ -37,6 +35,7 @@ function selectWorkspace(name: 'Температура' | 'Подходы к р�
 describe('App', () => {
   beforeEach(() => {
     localStorage.clear();
+    localStorage.setItem(REVISION_KEY, HISTORY_REVISION);
     mockAsk.mockReset();
     mockAsk.mockImplementation(async (question, scope) => answerFor(question, scope));
   });
@@ -120,7 +119,7 @@ describe('App', () => {
     expect(mockAsk).not.toHaveBeenCalled();
   });
 
-  it('shows only three temperature tabs with medium selected and rejects empty questions', () => {
+  it('shows only three temperature tabs with medium selected and rejects empty questions', async () => {
     render(<App />);
     selectWorkspace('Температура');
     const tabs = screen.getByRole('tablist', { name: 'Температура генерации' });
@@ -129,7 +128,7 @@ describe('App', () => {
     expect(screen.getByText(/Рассуждения отключены/)).toHaveTextContent('temperature = 0.7');
     expect(screen.queryByRole('tablist', { name: 'Режим рассуждений' })).not.toBeInTheDocument();
     expect(screen.queryByRole('tablist', { name: 'Способ решения' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /отправить/i })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: /отправить/i })).toBeDisabled();
     submit('   ');
     expect(mockAsk).not.toHaveBeenCalled();
   });
@@ -185,7 +184,7 @@ describe('App', () => {
     render(<App />);
     selectWorkspace('Температура');
     fireEvent.click(screen.getByRole('tab', { name: 'Низкая' }));
-    expect(screen.getByText('Температурный')).toBeInTheDocument();
+    await screen.findByText('Температурный');
     expect(screen.getByLabelText('Ваш вопрос')).toHaveValue('');
     submit('Уточнение');
     await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(3));
@@ -194,9 +193,9 @@ describe('App', () => {
     ] });
   });
 
-  it('rejects empty and whitespace-only questions', () => {
+  it('rejects empty and whitespace-only questions', async () => {
     render(<App />);
-    const button = screen.getByRole('button', { name: /отправить/i });
+    const button = await screen.findByRole('button', { name: /отправить/i });
     expect(button).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Ваш вопрос'), { target: { value: '   ' } });
     expect(button).toBeDisabled();
@@ -213,7 +212,7 @@ describe('App', () => {
     expect(mockAsk.mock.calls[0][0]).toBe(question.trim());
     first.unmount();
     render(<App />);
-    expect(screen.getByText(question.trim())).toBeInTheDocument();
+    await screen.findByText(question.trim());
     submit('Уточнение');
     await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(2));
     expect(mockAsk.mock.calls[1][2].direct![0].content).toBe(question.trim());
@@ -275,7 +274,7 @@ describe('App', () => {
     await screen.findByText('Ответ модели');
     first.unmount();
     render(<App />);
-    expect(screen.getByText('Первый вопрос')).toBeInTheDocument();
+    await screen.findByText('Первый вопрос');
     fireEvent.click(screen.getByRole('tab', { name: 'Команда ролей' }));
     expect(screen.getByText('Ролевой вопрос')).toBeInTheDocument();
     submit('Проверь ещё раз');
@@ -310,7 +309,7 @@ describe('App', () => {
     expect(screen.getByText('Вопрос минимуму')).toBeInTheDocument();
     first.unmount();
     render(<App />);
-    expect(screen.getByText('Вопрос минимуму')).toBeInTheDocument();
+    await screen.findByText('Вопрос минимуму');
     fireEvent.click(screen.getByRole('tab', { name: 'Максимум рассуждений' }));
     expect(screen.getByText('Вопрос максимуму')).toBeInTheDocument();
     expect(screen.getByText('Уточнение максимуму')).toBeInTheDocument();
@@ -324,7 +323,7 @@ describe('App', () => {
     render(<App />);
     submit('Минимум');
     fireEvent.click(screen.getByRole('tab', { name: 'Максимум рассуждений' }));
-    expect(screen.getByLabelText('Ваш вопрос')).toBeEnabled();
+    await waitFor(() => expect(screen.getByLabelText('Ваш вопрос')).toBeEnabled());
     submit('Максимум');
     await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(2));
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Очистить историю' })));
@@ -600,7 +599,7 @@ describe('App', () => {
   it('recovers from corrupt saved data without overwriting it until the user acts', async () => {
     localStorage.setItem(STORAGE_KEY, '{broken');
     render(<App />);
-    expect(screen.getByRole('alert')).toHaveTextContent('Не удалось прочитать историю');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Не удалось прочитать историю');
     expect(localStorage.getItem(STORAGE_KEY)).toBe('{broken');
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Очистить историю' })));
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();

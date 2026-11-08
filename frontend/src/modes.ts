@@ -11,7 +11,14 @@ export const TEMPERATURE_LABELS: Record<Temperature, string> = {
   0.7: 'Средняя',
   1.2: 'Высокая',
 };
-export const WORKSPACE_LABELS = { reasoning: 'Подходы к решению', temperature: 'Температура' } as const;
+export const CHAT_MODELS = ['kimi-k2.7-code', 'grok-4.7', 'gpt-6-luna'] as const;
+export type ChatModel = typeof CHAT_MODELS[number];
+export const MODEL_LABELS: Record<ChatModel, string> = {
+  'kimi-k2.7-code': 'Kimi K2.7 Code',
+  'grok-4.7': 'Grok 4.7',
+  'gpt-6-luna': 'GPT‑6 Luna',
+};
+export const WORKSPACE_LABELS = { reasoning: 'Подходы к решению', temperature: 'Температура', models: 'Модели' } as const;
 export type Workspace = keyof typeof WORKSPACE_LABELS;
 
 export const EFFORT_LABELS: Record<Effort, string> = {

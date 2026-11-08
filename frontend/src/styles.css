@@ -97,6 +97,21 @@ textarea:disabled { opacity: 0.65; }
 .page-footer span:last-child { max-width: 390px; text-align: right; }
 
 @keyframes pulse { 50% { opacity: 0.25; } }
+
+/* Keep the existing workspaces unchanged; model chats also fit narrow screens. */
+body:has(.page[data-workspace="models"]) { min-width: 320px; }
+@media (max-width: 760px) {
+  .page[data-workspace="models"] { padding: 0 18px; }
+  .page[data-workspace="models"] .page-header { flex-wrap: wrap; gap: 12px; padding: 18px 0; }
+  .page[data-workspace="models"] .header-start { flex-wrap: wrap; gap: 12px; }
+  .page[data-workspace="models"] .effort-tabs { flex-wrap: wrap; }
+  .page[data-workspace="models"] .effort-tabs button { min-width: 0; flex: 1 1 140px; }
+  .page[data-workspace="models"] .workspace { margin: 32px auto; }
+  .page[data-workspace="models"] h1 { font-size: 32px; }
+  .page[data-workspace="models"] .form-footer { flex-wrap: wrap; }
+  .page[data-workspace="models"] .page-footer { flex-direction: column; gap: 12px; }
+  .page[data-workspace="models"] .page-footer span:last-child { max-width: none; text-align: left; }
+}
 @keyframes menu-enter { from { transform: translateX(-100%); } to { transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

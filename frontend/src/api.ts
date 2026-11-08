@@ -1,5 +1,5 @@
-import { EFFORTS, STRATEGIES, TEMPERATURES } from './modes';
-import type { Effort, Mode, Strategy, Temperature } from './modes';
+import { CHAT_MODELS, EFFORTS, STRATEGIES, TEMPERATURES } from './modes';
+import type { ChatModel, Effort, Mode, Strategy, Temperature } from './modes';
 import type { ConversationScope } from './conversation-scope';
 
 export interface Message {
@@ -33,18 +33,27 @@ interface BaseAnswer {
 }
 
 export interface ReasoningAnswer extends BaseAnswer {
+  model?: never;
   // Absent only in local history imported from before effort controls existed.
   effort?: Effort;
   temperature?: never;
 }
 
 export interface TemperatureAnswer extends BaseAnswer {
+  model?: never;
   mode: 'direct';
   effort: null;
   temperature: Temperature;
 }
 
-export type Answer = ReasoningAnswer | TemperatureAnswer;
+export interface ModelAnswer extends BaseAnswer {
+  model: ChatModel;
+  mode: 'direct';
+  effort: null;
+  temperature?: never;
+}
+
+export type Answer = ReasoningAnswer | TemperatureAnswer | ModelAnswer;
 
 const ISO_DATETIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const EXPECTED_STAGES: Record<Strategy, readonly Stage['name'][]> = {
@@ -90,15 +99,19 @@ export function isAnswer(data: unknown, question: string, mode: Mode, expected?:
   if (!isRecord(data)) return false;
   const hasEffort = 'effort' in data;
   const hasTemperature = 'temperature' in data;
+  const hasModel = 'model' in data;
   let fieldCount = 5;
   if (hasEffort) fieldCount = 6;
-  if (hasTemperature) fieldCount = 7;
+  if (hasTemperature || hasModel) fieldCount = 7;
   if (Object.keys(data).length !== fieldCount) return false;
-  if (hasTemperature) {
+  if (hasModel) {
+    if (hasTemperature || data.mode !== 'direct' || data.effort !== null || !CHAT_MODELS.includes(data.model as ChatModel)) return false;
+  } else if (hasTemperature) {
     if (data.mode !== 'direct' || data.effort !== null || !TEMPERATURES.includes(data.temperature as Temperature)) return false;
   } else if (hasEffort && !EFFORTS.includes(data.effort as Effort)) return false;
-  if (expected?.workspace === 'temperature' && (!hasTemperature || data.temperature !== expected.temperature)) return false;
-  if (expected?.workspace === 'reasoning' && (hasTemperature || data.effort !== expected.effort)) return false;
+  if (expected?.workspace === 'models' && (!hasModel || data.model !== expected.model)) return false;
+  if (expected?.workspace === 'temperature' && (hasModel || !hasTemperature || data.temperature !== expected.temperature)) return false;
+  if (expected?.workspace === 'reasoning' && (hasModel || hasTemperature || data.effort !== expected.effort)) return false;
   if (data.question !== question || !isText(question) || data.mode !== mode) return false;
   if (typeof data.date !== 'string' || !ISO_DATETIME_PATTERN.test(data.date) || !Number.isFinite(Date.parse(data.date))) return false;
 
@@ -108,6 +121,7 @@ export function isAnswer(data: unknown, question: string, mode: Mode, expected?:
   if (results.length !== modes.length || !results.every(
     (result, index): result is Result => isResult(result, modes[index]),
   )) return false;
+  if (hasModel && results[0].error !== null) return false;
 
   let total = 0;
   for (const result of results) {
@@ -121,11 +135,14 @@ export async function askQuestion(
   question: string, scope: ConversationScope, history: History, signal: AbortSignal,
   conversationId?: string,
 ): Promise<Answer> {
-  const settings = scope.workspace === 'temperature' ? { temperature: scope.temperature } : { effort: scope.effort };
-  const response = await fetch('/api/ask', {
+  let settings: { model: ChatModel } | { mode: Mode; temperature: Temperature } | { mode: Mode; effort: Effort };
+  if (scope.workspace === 'models') settings = { model: scope.model };
+  else if (scope.workspace === 'temperature') settings = { mode: scope.mode, temperature: scope.temperature };
+  else settings = { mode: scope.mode, effort: scope.effort };
+  const response = await fetch(scope.workspace === 'models' ? '/api/ask-models' : '/api/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, mode: scope.mode, ...settings, history, conversation_id: conversationId }),
+    body: JSON.stringify({ question, ...settings, history, conversation_id: conversationId }),
     signal,
   });
 

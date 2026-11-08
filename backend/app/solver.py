@@ -8,9 +8,11 @@ from fastapi import HTTPException
 
 from .config import Settings
 from .opencode_go import complete
+from .responses_go import complete_responses
+from .model_registry import CHAT_MODELS
 from .schemas import (
     STRATEGIES, Answer, AskAnswer, AskQuestion, Result, Stage, StageName, Strategy,
-    TemperatureAnswer, TemperatureQuestion,
+    TemperatureAnswer, TemperatureQuestion, ModelAnswer, ModelQuestion,
 )
 
 LANGUAGE_INSTRUCTION = (
@@ -133,4 +135,24 @@ async def solve(payload: AskQuestion, settings: Settings, client: httpx.AsyncCli
     return answer_type(
         question=payload.question, date=datetime.now(UTC), mode=payload.mode,
         tokens=total_tokens, results=results, **metadata,
+    )
+
+
+async def solve_model(payload: ModelQuestion, settings: Settings, client: httpx.AsyncClient) -> ModelAnswer:
+    started = monotonic()
+    session_id = str(uuid5(payload.conversation_id, f"models:{payload.model}:direct"))
+    messages = [
+        {"role": "system", "content": LANGUAGE_INSTRUCTION},
+        *[message.model_dump() for message in payload.history.get("direct", [])],
+        {"role": "user", "content": payload.question},
+    ]
+    if CHAT_MODELS[payload.model].protocol == "responses":
+        answer, tokens = await complete_responses(messages, settings, client, session_id, model=payload.model)
+    else:
+        answer, tokens = await complete(messages, settings, client, session_id, {}, model=payload.model)
+    return ModelAnswer(
+        question=payload.question, date=datetime.now(UTC), model=payload.model,
+        mode="direct", effort=None, tokens=tokens,
+        results=[Result(mode="direct", answer=answer, tokens=tokens,
+                        duration_ms=round((monotonic() - started) * 1000), stages=[], error=None)],
     )

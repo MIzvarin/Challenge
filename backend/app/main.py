@@ -12,8 +12,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import ROOT_DIR, Settings, load_settings
 from .opencode_go import API_BASE_URL
-from .schemas import AskAnswer, AskQuestion
-from .solver import solve
+from .schemas import AskAnswer, AskQuestion, ModelAnswer, ModelQuestion
+from .solver import solve, solve_model
 
 
 class RateLimiter:
@@ -75,12 +75,20 @@ def create_app(
     async def health():
         return {"status": "ok"}
 
-    @app.post("/api/ask", response_model=AskAnswer)
-    async def ask(payload: AskQuestion):
+    def check_generation_access() -> None:
         if not settings.api_key:
             raise HTTPException(503, "Добавьте OPENCODE_GO_API_KEY из OpenCode Console в корневой .env и перезапустите сервер.")
         limiter.check()
+
+    @app.post("/api/ask", response_model=AskAnswer)
+    async def ask(payload: AskQuestion):
+        check_generation_access()
         return await solve(payload, settings, app.state.opencode_go_client)
+
+    @app.post("/api/ask-models", response_model=ModelAnswer)
+    async def ask_model(payload: ModelQuestion):
+        check_generation_access()
+        return await solve_model(payload, settings, app.state.opencode_go_client)
 
     # Only the compiled frontend is public. The root .env is never served.
     frontend_dist = ROOT_DIR / "frontend" / "dist"

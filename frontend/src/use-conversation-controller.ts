@@ -43,13 +43,13 @@ function requestError(cause: unknown, aborted: boolean): string {
 
 export function useConversationController(scope: ConversationScope): ConversationController {
   const [store] = useState(createConversationStore);
-  const { conversations, warning: storageWarning } = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const { conversations, warning: storageWarning, initialized } = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [drafts, setDrafts] = useState(emptyDrafts);
   const [isClearing, setIsClearing] = useState(false);
   const activeRequests = useRef(new Map<ConversationKey, ActiveRequest>());
   const key = conversationKey(scope);
   const turns = conversations[key];
-  const isSubmitting = isClearing || turns.some(isPendingTurn);
+  const isSubmitting = !initialized || isClearing || turns.some(isPendingTurn);
 
   useEffect(() => {
     const requests = activeRequests.current;
@@ -69,6 +69,7 @@ export function useConversationController(scope: ConversationScope): Conversatio
 
   async function handleSubmit(): Promise<void> {
     const question = drafts[key].trim();
+    // store.update checks the revision under the history lock before any API call.
     if (!question || isClearing || activeRequests.current.has(key)) return;
 
     const turn: Turn = { id: crypto.randomUUID(), question, date: new Date().toISOString(), response: null, error: null };

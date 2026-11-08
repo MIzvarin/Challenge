@@ -2,6 +2,8 @@ import { emptyProfiles, HISTORY_STORAGE_KEYS, loadConversations, saveConversatio
 import type { Profiles } from './conversations';
 
 export const GENERATION_KEY = 'challenge.conversations.generation';
+export const REVISION_KEY = 'challenge.conversations.revision';
+export const HISTORY_REVISION = 'kimi-grok-luna-v1';
 const HISTORY_LOCK = 'challenge.conversations';
 const REQUEST_LOCK_PREFIX = 'challenge.request.';
 const UUID_PATTERN = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
@@ -16,6 +18,7 @@ export interface ConversationSnapshot {
   conversations: Profiles;
   generation: string | null;
   warning: string | null;
+  initialized: boolean;
 }
 
 interface UpdateResult {
@@ -36,7 +39,7 @@ export interface ConversationStore {
 export function createConversationStore(): ConversationStore {
   const locks = navigator.locks;
   let persistent = Boolean(locks);
-  let snapshot: ConversationSnapshot = { ...loadConversations(), generation: null };
+  let snapshot: ConversationSnapshot = { conversations: emptyProfiles(), generation: null, warning: null, initialized: false };
   let lastStoredGeneration: string | null | undefined;
   const listeners = new Set<() => void>();
   const resetListeners = new Set<() => void>();
@@ -58,15 +61,22 @@ export function createConversationStore(): ConversationStore {
   }
 
   async function read(): Promise<ConversationSnapshot> {
+    let resetting = false;
     try {
+      if (persistent && localStorage.getItem(REVISION_KEY) !== HISTORY_REVISION) {
+        resetting = true;
+        resetStorage();
+        // Commit the revision only after every removal and generation write succeeded.
+        localStorage.setItem(REVISION_KEY, HISTORY_REVISION);
+      }
       let generation = localStorage.getItem(GENERATION_KEY);
       if (!persistent) {
         if (lastStoredGeneration !== undefined && generation !== lastStoredGeneration) {
           lastStoredGeneration = generation;
-          return { conversations: emptyProfiles(), generation: validGeneration(generation), warning: snapshot.warning };
+          return { conversations: emptyProfiles(), generation: validGeneration(generation), warning: snapshot.warning, initialized: true };
         }
         lastStoredGeneration = generation;
-        return { ...snapshot, generation: snapshot.generation ?? validGeneration(generation), warning: locks ? STORAGE_WARNING : LOCKS_WARNING };
+        return { ...snapshot, generation: snapshot.generation ?? validGeneration(generation), warning: locks ? STORAGE_WARNING : LOCKS_WARNING, initialized: true };
       }
       if (generation === null || !UUID_PATTERN.test(generation)) {
         generation = validGeneration(generation);
@@ -77,10 +87,16 @@ export function createConversationStore(): ConversationStore {
       const activeRequests = new Set(held.flatMap((lock) => (
         lock.name?.startsWith(REQUEST_LOCK_PREFIX) ? [lock.name.slice(REQUEST_LOCK_PREFIX.length)] : []
       )));
-      return { ...loadConversations(activeRequests), generation };
+      return { ...loadConversations(activeRequests), generation, initialized: true };
     } catch {
       persistent = false;
-      return { ...snapshot, generation: snapshot.generation ?? crypto.randomUUID(), warning: STORAGE_WARNING };
+      return {
+        ...snapshot,
+        conversations: resetting ? emptyProfiles() : snapshot.conversations,
+        generation: resetting ? crypto.randomUUID() : snapshot.generation ?? crypto.randomUUID(),
+        warning: STORAGE_WARNING,
+        initialized: true,
+      };
     }
   }
 
@@ -89,7 +105,7 @@ export function createConversationStore(): ConversationStore {
   }
 
   function handleStorage(event: StorageEvent): void {
-    if (event.key === null || [...HISTORY_STORAGE_KEYS, GENERATION_KEY].includes(event.key)) {
+    if (event.key === null || [...HISTORY_STORAGE_KEYS, GENERATION_KEY, REVISION_KEY].includes(event.key)) {
       void refresh();
     }
   }
@@ -128,24 +144,36 @@ export function createConversationStore(): ConversationStore {
       if (conversations === null) return { snapshot, applied: false };
       let warning = snapshot.warning;
       if (persistent) {
-        warning = saveConversations(conversations);
-        if (warning) persistent = false;
+        const saveWarning = saveConversations(conversations, snapshot.conversations);
+        if (saveWarning) {
+          warning = saveWarning;
+          persistent = false;
+        } else if (warning !== null) {
+          // Saving one group does not necessarily repair another group's read error.
+          warning = loadConversations().warning;
+        }
       }
       publish({ ...snapshot, conversations, warning });
       return { snapshot, applied: true };
     });
   }
 
+  function resetStorage(): string {
+    const generation = crypto.randomUUID();
+    localStorage.removeItem(GENERATION_KEY);
+    for (const key of HISTORY_STORAGE_KEYS) localStorage.removeItem(key);
+    localStorage.setItem(GENERATION_KEY, generation);
+    lastStoredGeneration = generation;
+    return generation;
+  }
+
   async function clear(): Promise<void> {
     await locked(HISTORY_LOCK, async () => {
-      const generation = crypto.randomUUID();
+      let generation: string = crypto.randomUUID();
       let warning: string | null = null;
       try {
         // The lock makes removal and the new generation one atomic operation for other tabs.
-        localStorage.removeItem(GENERATION_KEY);
-        for (const key of HISTORY_STORAGE_KEYS) localStorage.removeItem(key);
-        localStorage.setItem(GENERATION_KEY, generation);
-        lastStoredGeneration = generation;
+        if (locks) generation = resetStorage();
         persistent = Boolean(locks);
         if (!locks) warning = LOCKS_WARNING;
       } catch {
@@ -153,7 +181,7 @@ export function createConversationStore(): ConversationStore {
         lastStoredGeneration = undefined;
         warning = STORAGE_WARNING;
       }
-      publish({ conversations: emptyProfiles(), generation, warning });
+      publish({ conversations: emptyProfiles(), generation, warning, initialized: true });
     });
   }
 

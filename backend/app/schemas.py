@@ -1,7 +1,9 @@
-from typing import Annotated, Literal, Self
+from typing import Annotated, ClassVar, Literal, Self
 from uuid import UUID, uuid4
 
 from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
+
+from .model_registry import ChatModel
 
 Strategy = Literal["direct", "steps", "prompt", "roles"]
 Mode = Literal["direct", "steps", "prompt", "roles", "compare"]
@@ -106,3 +108,15 @@ class TemperatureAnswer(Answer):
 
 
 AskAnswer = Answer | TemperatureAnswer
+
+
+class ModelQuestion(BaseQuestion):
+    # A class constant retains shared direct-history validation, not a client option.
+    mode: ClassVar[Literal["direct"]] = "direct"
+    model: ChatModel
+
+
+class ModelAnswer(Answer):
+    mode: Literal["direct"]
+    effort: None
+    model: ChatModel

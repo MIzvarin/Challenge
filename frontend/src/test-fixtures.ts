@@ -1,6 +1,7 @@
-import type { ReasoningAnswer, Result, Stage, TemperatureAnswer } from './api';
+import type { Answer, ModelAnswer, ReasoningAnswer, Result, Stage, TemperatureAnswer } from './api';
+import type { ConversationScope } from './conversation-scope';
 import { MODES, STRATEGIES } from './modes';
-import type { Effort, Mode, Strategy, Temperature } from './modes';
+import type { ChatModel, Effort, Mode, Strategy, Temperature } from './modes';
 import type { Turn } from './conversations';
 
 export function emptyConversations(): Record<Mode, Turn[]> {
@@ -29,4 +30,19 @@ export function makeAnswer(question = 'Привет', mode: Mode = 'direct', eff
 
 export function makeTemperatureAnswer(question = 'Привет', temperature: Temperature = 0.7): TemperatureAnswer {
   return { ...makeAnswer(question), mode: 'direct', effort: null, temperature };
+}
+
+export function makeModelAnswer(question = 'Привет', model: ChatModel = 'kimi-k2.7-code'): ModelAnswer {
+  return { ...makeAnswer(question), mode: 'direct', effort: null, model };
+}
+
+export function makeScopedAnswer(question: string, scope: ConversationScope): Answer {
+  switch (scope.workspace) {
+    case 'reasoning':
+      return makeAnswer(question, scope.mode, scope.effort);
+    case 'temperature':
+      return makeTemperatureAnswer(question, scope.temperature);
+    case 'models':
+      return makeModelAnswer(question, scope.model);
+  }
 }

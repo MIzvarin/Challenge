@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import type { Answer, Result } from '../api';
 import { isPendingTurn } from '../conversations';
 import type { Turn } from '../conversations';
-import { MODE_LABELS, STAGE_LABELS } from '../modes';
+import { MODEL_LABELS, MODE_LABELS, STAGE_LABELS } from '../modes';
 
 interface ResultPanelProps {
   result: Result;
@@ -10,6 +10,7 @@ interface ResultPanelProps {
 }
 
 function generationMetadata(response: Answer): string {
+  if (response.model !== undefined) return `Модель: ${MODEL_LABELS[response.model]}`;
   if (response.temperature !== undefined) return `temperature: ${response.temperature} · Рассуждения отключены`;
   return response.effort ? `effort: ${response.effort}` : 'До настройки effort';
 }

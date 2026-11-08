@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
-import { EFFORTS, EFFORT_LABELS, MODES, MODE_LABELS, TEMPERATURES, TEMPERATURE_LABELS } from '../modes';
-import type { Effort, Mode, Temperature } from '../modes';
+import { CHAT_MODELS, MODEL_LABELS, EFFORTS, EFFORT_LABELS, MODES, MODE_LABELS, TEMPERATURES, TEMPERATURE_LABELS } from '../modes';
+import type { ChatModel, Effort, Mode, Temperature } from '../modes';
 
 interface TabsProps<T extends string | number> {
   selected: T;
@@ -55,4 +55,8 @@ export function EffortTabs(props: Pick<TabsProps<Effort>, 'selected' | 'onSelect
 
 export function TemperatureTabs(props: Pick<TabsProps<Temperature>, 'selected' | 'onSelect'>): ReactElement {
   return <Tabs {...props} values={TEMPERATURES} labels={TEMPERATURE_LABELS} label="Температура генерации" prefix="temperature-" />;
+}
+
+export function ModelTabs(props: Pick<TabsProps<ChatModel>, 'selected' | 'onSelect'>): ReactElement {
+  return <Tabs {...props} values={CHAT_MODELS} labels={MODEL_LABELS} label="Модель" prefix="model-" />;
 }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createConversationStore, GENERATION_KEY } from './conversation-store';
+import { createConversationStore, GENERATION_KEY, HISTORY_REVISION, REVISION_KEY } from './conversation-store';
 import { emptyProfiles, HISTORY_STORAGE_KEYS, isPendingTurn, loadConversations, saveConversations, STORAGE_KEY } from './conversations';
 import type { Profiles, Turn } from './conversations';
 import type { Effort, Mode } from './modes';
@@ -23,7 +23,10 @@ function deferred() {
 }
 
 describe('conversation store', () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    localStorage.clear();
+    localStorage.setItem(REVISION_KEY, HISTORY_REVISION);
+  });
 
   it('clears every version and rejects old temperature replies without erasing a new conversation', async () => {
     const first = createConversationStore();

@@ -3,10 +3,14 @@ import { CONVERSATION_SCOPES, conversationKey, conversationRecord } from './conv
 import type { ConversationScope } from './conversation-scope';
 
 describe('conversation scopes', () => {
-  it('addresses exactly thirteen distinct conversations', () => {
+  it('addresses sixteen distinct conversations while preserving the original thirteen keys', () => {
     const keys = CONVERSATION_SCOPES.map(conversationKey);
-    expect(keys).toHaveLength(13);
-    expect(new Set(keys).size).toBe(13);
+    expect(keys).toHaveLength(16);
+    expect(new Set(keys).size).toBe(16);
+    expect(keys.filter((key) => !key.startsWith('models:'))).toHaveLength(13);
+    expect(keys.filter((key) => key.startsWith('models:'))).toEqual([
+      'models:kimi-k2.7-code:direct', 'models:grok-4.7:direct', 'models:gpt-6-luna:direct',
+    ]);
     expect(Object.keys(conversationRecord(() => []))).toEqual(keys);
     expect(conversationKey({ workspace: 'temperature', temperature: 0.0, mode: 'direct' })).toBe('temperature:0:direct');
   });
